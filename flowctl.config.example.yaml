@@ -1,0 +1,46 @@
+version: 1
+
+project:
+  name: sample-application
+  root: .
+
+sources:
+  frontend:
+    - frontend/src
+  backend:
+    - backend/src/main/java
+  include:
+    - "**/*.ts"
+    - "**/*.tsx"
+    - "**/*.java"
+  exclude:
+    - "**/node_modules/**"
+    - "**/dist/**"
+    - "**/build/**"
+
+graphify:
+  graph: graphify-out/graph.json
+  required: false
+
+wiki:
+  paths:
+    - llm-wiki
+  required: false
+
+analysis:
+  entryRoutes:
+    - /
+  includeHttpMethods:
+    - POST
+    - PUT
+    - PATCH
+    - DELETE
+  maxPathDepth: 40
+  maxStateVisits: 2
+
+output:
+  directory: .flowctl
+
+runtime:
+  baseUrl: http://localhost:3000
+  environment: local

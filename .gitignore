@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.DS_Store
+
+# Compiler work and generated artifacts
+**/.flowctl/cache/
+**/.flowctl/work/
+**/.flowctl/runs/
+**/.flowctl/artifacts/
+**/.flowctl/generated/
+
+# Environment-specific bindings and secrets
+**/.flowctl/data-bindings/*.local.yaml
+.env
+.env.*
+!.env.example
+
+# Playwright output
+playwright-report/
+test-results/
+.playwright-cli/

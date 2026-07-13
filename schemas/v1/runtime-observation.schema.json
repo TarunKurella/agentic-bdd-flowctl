@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/agentic-bdd/runtime-observation-v1.schema.json",
+  "title": "Playwright runtime grounding observation",
+  "type": "object",
+  "required": ["runId", "environment", "observations"],
+  "properties": {
+    "runId": { "type": "string" },
+    "environment": { "type": "string" },
+    "observations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["actionId", "screenId", "locator", "componentAdapter", "unique", "actionable", "evidenceRefs"],
+        "properties": {
+          "actionId": { "type": "string" },
+          "screenId": { "type": "string" },
+          "locator": {
+            "type": "object",
+            "required": ["strategy"],
+            "properties": {
+              "strategy": { "enum": ["role-and-name", "label", "test-id", "scoped-text", "reviewed-css"] },
+              "role": { "type": "string" },
+              "name": { "type": "string" },
+              "value": { "type": "string" }
+            },
+            "additionalProperties": false
+          },
+          "componentAdapter": { "type": "string" },
+          "unique": { "type": "boolean" },
+          "actionable": { "type": "boolean" },
+          "observedOperationId": { "type": "string" },
+          "observedNextStateId": { "type": "string" },
+          "evidenceRefs": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,36 @@
+{
+  "nodes": [
+    {
+      "id": "react-review",
+      "name": "ReviewApplicationPage",
+      "kind": "component",
+      "file": "frontend/src/pages/ReviewApplicationPage.tsx",
+      "line": 6,
+      "origin": "EXTRACTED"
+    },
+    {
+      "id": "java-controller",
+      "name": "ApplicationController.submitApplication",
+      "kind": "endpoint",
+      "file": "backend/src/main/java/com/example/application/ApplicationController.java",
+      "line": 21,
+      "origin": "EXTRACTED"
+    },
+    {
+      "id": "application-service",
+      "name": "ApplicationService.submit",
+      "kind": "function",
+      "file": "backend/src/main/java/com/example/application/ApplicationService.java",
+      "line": 10,
+      "origin": "INFERRED"
+    }
+  ],
+  "edges": [
+    {
+      "source": "java-controller",
+      "target": "application-service",
+      "kind": "calls",
+      "origin": "EXTRACTED"
+    }
+  ]
+}

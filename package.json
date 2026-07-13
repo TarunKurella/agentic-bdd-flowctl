@@ -1,0 +1,37 @@
+{
+  "name": "agentic-bdd-flowctl",
+  "version": "0.1.0",
+  "description": "A source-grounded compiler from React/Java evidence to happy-path BDD and Playwright execution manifests.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "flowctl": "./dist/src/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "node --import tsx src/cli.ts",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "demo": "node --import tsx src/cli.ts analyze --config examples/account-opening/flowctl.config.yaml --through coverage",
+    "demo:bdd": "node --import tsx src/cli.ts bdd generate --config examples/account-opening/flowctl.config.yaml"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "commander": "15.0.0",
+    "fast-glob": "3.3.3",
+    "java-parser": "3.0.1",
+    "ts-morph": "28.0.0",
+    "yaml": "2.9.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "4.23.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}

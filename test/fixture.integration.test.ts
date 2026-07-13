@@ -1,0 +1,135 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { loadConfig } from '../src/core/config.js';
+import { ArtifactStore } from '../src/core/artifact-store.js';
+import { analyze } from '../src/pipeline/analyze.js';
+import { generateBdd } from '../src/bdd/generate.js';
+import { prepareGrounding } from '../src/runtime/grounding.js';
+import { compileExecutionPlan } from '../src/runtime/execution-plan.js';
+import { inspectPacket, validatePacketProposal } from '../src/agent/packets.js';
+import type {
+  ActorRequirements,
+  BehaviorGraph,
+  CoverageReport,
+  EvidenceGraph,
+  FlowVariants,
+  OperationCatalog,
+  PageContracts,
+  PathWitnesses,
+} from '../src/ir/model.js';
+
+const configPath = path.resolve('examples/account-opening/flowctl.config.yaml');
+let store: ArtifactStore;
+
+beforeAll(async () => {
+  const config = await loadConfig(configPath);
+  store = new ArtifactStore(config);
+  await analyze(config, 'coverage');
+});
+
+describe('account-opening golden fixture', () => {
+  it('links UI, HTTP and Java terminal evidence', async () => {
+    const evidence = await store.read<EvidenceGraph>('evidence');
+    const operations = await store.read<OperationCatalog>('operations');
+    expect(evidence.data.nodes.some((node) => node.kind === 'control' && node.label === 'Submit application')).toBe(true);
+    expect(evidence.data.edges.some((edge) => edge.kind === 'handled-by')).toBe(true);
+    expect(operations.data.operations).toHaveLength(1);
+    expect(operations.data.operations[0]).toMatchObject({
+      method: 'POST',
+      pathTemplate: '/api/applications',
+      businessCommand: { machineName: 'application.submit' },
+      inclusion: 'included',
+    });
+  });
+
+  it('retains page fields, backend validation and actor authority', async () => {
+    const pages = await store.read<PageContracts>('pages');
+    const actors = await store.read<ActorRequirements>('actors');
+    const productFields = pages.data.pages.flatMap((page) => page.fields).filter((field) => field.dataPath === 'productCode');
+    expect(productFields.some((field) => field.constraints.some((constraint) => constraint.kind === 'min' && constraint.value === 3))).toBe(true);
+    expect(productFields.some((field) => field.constraints.some((constraint) => constraint.kind === 'max' && constraint.value === 12))).toBe(true);
+    expect(actors.data.actors[0]?.authoritiesAll).toContain('APPLICATION_CREATE');
+  });
+
+  it('discovers two distinct successful variants with witnesses', async () => {
+    const variants = await store.read<FlowVariants>('variants');
+    const witnesses = await store.read<PathWitnesses>('witnesses');
+    const behavior = await store.read<BehaviorGraph>('behavior');
+    expect(variants.data.variants.map((variant) => variant.id)).toEqual([
+      'application.submit.joint',
+      'application.submit.personal',
+    ]);
+    expect(new Set(variants.data.variants.map((variant) => variant.behaviorSignature)).size).toBe(2);
+    expect(witnesses.data.witnesses).toHaveLength(2);
+    for (const variant of variants.data.variants) {
+      expect(variant.witnessIds.length).toBeGreaterThan(0);
+      expect(variant.pageSequence.at(-1)).toBe(behavior.data.successNodeIds[0]);
+      expect(variant.feasibility).toBe('satisfiable');
+    }
+  });
+
+  it('does not invent actor or existing applicant bindings', async () => {
+    const joint = path.join(store.dataRequirementsDirectory, 'application.submit.joint.yaml');
+    const text = await fs.readFile(joint, 'utf8');
+    expect(text).toContain('classification: existing-entity');
+    expect(text).toContain('classification: authenticated-identity');
+    expect(text).toContain('status: unresolved');
+    expect(text).not.toMatch(/password:|token:|customerId:\s*[A-Z0-9-]+/i);
+  });
+
+  it('generates journey and detailed page-contract BDD', async () => {
+    const generated = await generateBdd(store, 'application.submit');
+    const journey = generated.find((file) => file.endsWith('application.submit.feature'))!;
+    const text = await fs.readFile(journey, 'utf8');
+    expect(text).toContain('@variant:application.submit.joint');
+    expect(text).toContain('@variant:application.submit.personal');
+    expect(text).toContain('Then "Submit Application" should succeed');
+    const pageFeature = generated.find((file) => file.includes('page-contracts') && file.endsWith('.feature'))!;
+    expect(await fs.readFile(pageFeature, 'utf8')).toContain('active validation contract');
+    const steps = generated.find((file) => file.endsWith('flowctl.steps.generated.ts'))!;
+    expect(await fs.readFile(steps, 'utf8')).toContain('registerFlowctlSteps');
+  });
+
+  it('creates a bounded runtime grounding manifest', async () => {
+    const prepared = await prepareGrounding(store, 'application.submit.joint', 'uat');
+    const manifest = JSON.parse(await fs.readFile(prepared.path, 'utf8')) as { variantId: string; rules: string[]; steps: unknown[] };
+    expect(manifest.variantId).toBe('application.submit.joint');
+    expect(manifest.rules).toContain('Do not persist snapshot-local references.');
+    expect(manifest.steps.length).toBeGreaterThan(0);
+  });
+
+  it('refuses executable status while UAT data and actions are unbound', async () => {
+    const { plan } = await compileExecutionPlan(store, 'application.submit.joint', 'uat');
+    expect(plan.readiness).toBe('blocked-data');
+    expect(plan.data.missing.some((item) => item.classification === 'existing-entity')).toBe(true);
+    expect(plan.missingActionBindings.length).toBeGreaterThan(0);
+  });
+
+  it('reports modeled and runtime coverage separately', async () => {
+    const coverage = await store.read<CoverageReport>('coverage');
+    expect(coverage.data.counts.variants).toBe(2);
+    expect(coverage.data.counts.pathWitnesses).toBe(2);
+    expect(coverage.data.counts.runtimeBindings).toBe(0);
+    expect(coverage.data.counts.unresolvedDataRequirements).toBeGreaterThan(0);
+  });
+
+  it('validates bounded semantic proposals against allowed evidence', async () => {
+    const packet = await inspectPacket(store, 'packet.operation-semantics.v1');
+    await fs.writeFile(packet.outputPath, JSON.stringify({
+      packetId: packet.packetId,
+      decisions: [{
+        operationId: packet.allowedOperationIds[0],
+        label: 'Submit application',
+        machineName: 'application.submit',
+        aliases: ['open application'],
+        familyHint: 'application lifecycle',
+        explanation: 'The submit handler reaches the application mutation.',
+        evidenceRefs: [packet.allowedEvidenceIds[0]],
+      }],
+      unresolved: [],
+    }), 'utf8');
+    const proposal = await validatePacketProposal(store, packet.packetId);
+    expect(proposal.decisions[0]?.machineName).toBe('application.submit');
+  });
+});
