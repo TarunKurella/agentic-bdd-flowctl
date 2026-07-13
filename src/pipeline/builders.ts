@@ -374,6 +374,7 @@ export function reduceVariants(
   witnesses: PathWitnesses,
   families: FlowFamilies,
   graph: BehaviorGraph,
+  pages: PageContracts,
 ): FlowVariants {
   const variants: FlowVariant[] = [];
   for (const family of families.families) {
@@ -387,6 +388,7 @@ export function reduceVariants(
         actionSequence: witness.actionSequence,
         operationIds,
         successNode: witness.nodePath.at(-1),
+        activeFieldContracts: activeFieldContracts(witness, pages),
       };
       const signature = sha256(stableJson(signatureValue));
       groups.set(signature, [...(groups.get(signature) ?? []), witness]);
@@ -424,7 +426,10 @@ export function buildDataRequirements(
 ): DataRequirement[] {
   const requirements: DataRequirement[] = [];
   for (const variant of variants.variants) {
-    const fields = pages.pages.filter((page) => variant.pageSequence.includes(page.id)).flatMap((page) => page.fields);
+    const fields = pages.pages
+      .filter((page) => variant.pageSequence.includes(page.id))
+      .flatMap((page) => page.fields)
+      .filter((field) => fieldIsActive(field, variant.pathCondition));
     for (const field of fields) {
       const assigned = assignmentForField(variant.pathCondition, field.dataPath);
       const classification = classifyField(field, assigned !== undefined);
@@ -460,6 +465,38 @@ export function buildDataRequirements(
     variant.dataRequirementIds = [...new Set(variant.dataRequirementIds)];
   }
   return dedupe(requirements, (value) => value.id);
+}
+
+function activeFieldContracts(witness: PathWitness, pages: PageContracts): Record<string, unknown>[] {
+  return pages.pages
+    .filter((page) => witness.pageSequence.includes(page.id))
+    .flatMap((page) => page.fields.map((field) => ({ page, field })))
+    .filter(({ field }) => fieldIsActive(field, witness.pathCondition))
+    .map(({ page, field }) => ({
+      pageId: page.id,
+      fieldPath: field.dataPath,
+      controlKind: field.controlKind,
+      visibility: solvePredicate(allPredicates([witness.pathCondition, ...field.visibleWhen])).status,
+      required: field.requiredWhen.length
+        ? solvePredicate(allPredicates([witness.pathCondition, ...field.requiredWhen])).status
+        : field.constraints.some((constraint) => constraint.kind === 'required' && constraint.value !== false),
+      constraints: dedupe(field.constraints, constraintSemanticKey).map((constraint) => ({
+        kind: constraint.kind,
+        value: constraint.value,
+      })),
+    }));
+}
+
+function fieldIsActive(field: ReactFieldFact, pathCondition: Predicate): boolean {
+  return solvePredicate(allPredicates([pathCondition, ...field.visibleWhen])).status !== 'unsatisfiable';
+}
+
+function constraintSemanticKey(constraint: ReactFieldFact['constraints'][number]): string {
+  return stableJson({
+    fieldPath: constraint.fieldPath.split('.').at(-1)?.toLowerCase(),
+    kind: constraint.kind,
+    value: constraint.value,
+  });
 }
 
 export function buildCoverage(

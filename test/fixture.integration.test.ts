@@ -87,8 +87,17 @@ describe('account-opening golden fixture', () => {
     expect(text).toContain('Then "Submit Application" should succeed');
     const pageFeature = generated.find((file) => file.includes('page-contracts') && file.endsWith('.feature'))!;
     expect(await fs.readFile(pageFeature, 'utf8')).toContain('active validation contract');
+    const jointPageFeature = generated.find((file) => file.includes('joint-applicant-page') && file.endsWith('.feature'))!;
+    const jointPageText = await fs.readFile(jointPageFeature, 'utf8');
+    expect(jointPageText.match(/Enforce required validation for Joint applicant/g)).toHaveLength(1);
+    expect(jointPageText.match(/Enforce min validation for Product code/g)).toHaveLength(1);
     const steps = generated.find((file) => file.endsWith('flowctl.steps.generated.ts'))!;
-    expect(await fs.readFile(steps, 'utf8')).toContain('registerFlowctlSteps');
+    const stepText = await fs.readFile(steps, 'utf8');
+    expect(stepText).toContain('registerFlowctlSteps');
+    expect(stepText).toContain('ensurePageDisplayed');
+    const planFile = generated.find((file) => file.endsWith('step-plan.json'))!;
+    const plan = JSON.parse(await fs.readFile(planFile, 'utf8')) as { steps: Array<{ witnessId: string; nodePath: string[] }> };
+    expect(plan.steps.every((step) => step.witnessId && step.nodePath.length > 0)).toBe(true);
   });
 
   it('creates a bounded runtime grounding manifest', async () => {

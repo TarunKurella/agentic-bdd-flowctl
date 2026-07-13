@@ -106,7 +106,7 @@ export async function analyze(config: FlowctlConfig, through: Stage = 'coverage'
   completedStages.push('witnesses');
   if (stopAfter('witnesses')) return summarize();
 
-  variants = reduceVariants(witnesses, families, behavior);
+  variants = reduceVariants(witnesses, families, behavior, pages);
   completedStages.push('variants');
   if (stopAfter('variants')) {
     const envelope = store.createEnvelope({ artifactType: 'flow-variants', producer: 'variants:reduce', sourceDigest: snapshot.digest, inputDigests: { witnesses: witnessesEnvelope.meta.contentDigest }, data: variants });
