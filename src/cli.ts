@@ -8,7 +8,7 @@ import { stringify as stringifyYaml } from 'yaml';
 import { snapshotSources } from './adapters/source.js';
 import { loadConfig, type FlowctlConfig } from './core/config.js';
 import { ArtifactStore } from './core/artifact-store.js';
-import { analyze, STAGES, type Stage } from './pipeline/analyze.js';
+import { analyze, STAGES, type AnalyzeProgressEvent, type Stage } from './pipeline/analyze.js';
 import { generateBdd } from './bdd/generate.js';
 import { approvePacket, inspectPacket, validatePacketProposal } from './agent/packets.js';
 import { prepareGrounding, recordGrounding, verifyGroundingManifest } from './runtime/grounding.js';
@@ -19,8 +19,9 @@ import { bindRequirement, confirmRequirement, readVariantRequirements, verifyVar
 import { compileExecutionPlan } from './runtime/execution-plan.js';
 import { normalizeFlowctlError } from './core/errors.js';
 import { shellQuote } from './core/command.js';
-import { safeRealDescendantPath } from './core/paths.js';
 import { failureEnvelope, successEnvelope } from './ux/cli-envelope.js';
+import { inspectProjectHealth, renderDoctor } from './ux/doctor.js';
+import { listRuns, renderRun, renderRunList, showRun } from './ux/runs.js';
 import {
   buildAgentPrompt,
   buildProjectGuide,
@@ -63,9 +64,12 @@ Guided start:
   flowctl guide
   flowctl flows list
   flowctl graph trace <variant-id>
+  flowctl runs list
+  flowctl runs show latest
   flowctl agent prompt --variant <variant-id> --env <environment>
 
-Use --json for the stable flowctl.cli.v1 machine envelope.`)
+Use --json for the stable flowctl.cli.v1 machine envelope.
+Use --progress jsonl on analyze/discover for flowctl.progress.v1 events on stderr.`)
   .configureOutput({
     writeErr: (value) => {
       if (!process.argv.includes('--json')) process.stderr.write(value);
@@ -111,22 +115,27 @@ program.command('init')
 withConfig(program.command('doctor').description('Check configuration, source roots and optional inputs.'))
   .action(async (options: ConfigOptions) => {
     const config = await loadConfig(options.config);
-    const checks = await doctor(config);
-    print(checks, options.json);
-    if (checks.some((check) => check.status === 'error')) process.exitCode = 2;
+    const result = await inspectProjectHealth(config);
+    print(result, options.json, renderDoctor(result), { command: 'doctor', code: result.ready ? 'DOCTOR_READY' : 'CONFIG_INVALID', config });
+    if (!result.ready) process.exitCode = 2;
   });
 
 withConfig(program.command('analyze').description('Run the static artifact pipeline.'))
   .addOption(new Option('--through <stage>', 'Last pipeline stage').choices([...STAGES]).default('coverage'))
-  .action(async (options: ConfigOptions & { through: Stage }) => {
-    const result = await analyze(await loadConfig(options.config), options.through);
-    print(result, options.json);
+  .addOption(progressOption())
+  .action(async (options: ConfigOptions & { through: Stage; progress?: 'jsonl' }) => {
+    const config = await loadConfig(options.config);
+    const progress = progressReporter(options.progress, 'analyze');
+    const result = await analyze(config, options.through, { command: 'analyze', ...(progress ? { onProgress: progress } : {}) });
+    print(result, options.json, undefined, { command: 'analyze', config, sourceDigest: result.sourceDigest });
   });
 
 withConfig(program.command('discover').description('Build the complete source model, summarize its graphs and show the next safe action.'))
-  .action(async (options: ConfigOptions) => {
+  .addOption(progressOption())
+  .action(async (options: ConfigOptions & { progress?: 'jsonl' }) => {
     const config = await loadConfig(options.config);
-    const analysis = await analyze(config, 'coverage');
+    const progress = progressReporter(options.progress, 'discover');
+    const analysis = await analyze(config, 'coverage', { command: 'discover', ...(progress ? { onProgress: progress } : {}) });
     const store = new ArtifactStore(config);
     const [summary, guide] = await Promise.all([
       buildGraphSummary(store),
@@ -228,6 +237,49 @@ withConfig(flows.command('show <variant-id>').description('Show the full graph p
     const config = await loadConfig(options.config);
     const trace = await buildVariantTrace(new ArtifactStore(config), variantId);
     print(trace, options.json, renderVariantTrace(trace), { command: 'flows show', config, target: { variantId } });
+  });
+
+const runs = program.command('runs').description('List and inspect resumable analysis and runtime grounding runs.');
+withConfig(runs.command('list').description('List recent Flowctl runs and resume commands.'))
+  .option('--limit <count>', 'Maximum number of runs', '20')
+  .action(async (options: ConfigOptions & { limit: string }) => {
+    const config = await loadConfig(options.config);
+    const limit = Number.parseInt(options.limit, 10);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('--limit must be an integer between 1 and 1000.');
+    const values = await listRuns(new ArtifactStore(config), limit);
+    print({ runs: values }, options.json, renderRunList(values), { command: 'runs list', config });
+  });
+withConfig(runs.command('show <run-id>').description('Show one run; use latest for the most recent run.'))
+  .action(async (runId: string, options: ConfigOptions) => {
+    const config = await loadConfig(options.config);
+    const value = await showRun(new ArtifactStore(config), runId);
+    const target = {
+      ...(value.variantId ? { variantId: value.variantId } : {}),
+      ...(value.environment ? { environment: value.environment } : {}),
+    };
+    const resumeAction = value.resume ? {
+      id: 'resume-run',
+      kind: value.kind === 'grounding' ? 'runtime' as const : 'inspect' as const,
+      executor: value.resume.executor,
+      title: `Resume ${value.kind} workflow`,
+      reason: `Run ${value.runId} is ${value.status} and has a safe continuation.`,
+      command: value.resume.command,
+      blocking: false,
+    } : undefined;
+    print(value, options.json, renderRun(value), {
+      command: 'runs show',
+      code: value.status === 'stale' || value.status === 'expired' ? 'RUN_NOT_RESUMABLE' : 'OK',
+      config,
+      ...(Object.keys(target).length ? { target } : {}),
+      ...(resumeAction ? { nextActions: [resumeAction] } : {}),
+      ...((value.status === 'stale' || value.status === 'expired') ? {
+        diagnostics: [{
+          code: 'RUN_NOT_RESUMABLE',
+          severity: 'warning' as const,
+          message: `Run ${value.runId} is ${value.status}; inspect its paths but obtain a current action from flowctl agent guide.`,
+        }],
+      } : {}),
+    });
   });
 
 const packet = program.command('packet').description('Inspect and validate file-mediated agent packets.');
@@ -592,6 +644,19 @@ function withGuidance(command: Command): Command {
     .option('--env <environment>', 'Target runtime environment');
 }
 
+function progressOption(): Option {
+  return new Option('--progress <format>', 'Write machine-readable progress events to stderr').choices(['jsonl']);
+}
+
+function progressReporter(format: 'jsonl' | undefined, command: string): ((event: AnalyzeProgressEvent) => void) | undefined {
+  if (format !== 'jsonl') return undefined;
+  let sequence = 0;
+  return (event) => {
+    sequence += 1;
+    process.stderr.write(`${JSON.stringify({ ...event, command, sequence })}\n`);
+  };
+}
+
 function bindingArgumentTemplate(classification: DataRequirement['classification']): string {
   if (classification === 'secret-reference' || classification === 'authenticated-identity') {
     return '--secret-ref <approved-provider-reference>';
@@ -693,7 +758,13 @@ function guideDiagnostics(guide: ProjectGuide): Diagnostic[] {
       code: blocker.code,
       severity: 'blocked' as const,
       message: blocker.message,
-      ...(blocker.resolution ? { scope: blocker.resolution } : {}),
+      ...((blocker.resolution || blocker.configKeys?.length || blocker.paths?.length) ? {
+        scope: [
+          blocker.resolution,
+          blocker.configKeys?.length ? `config=${blocker.configKeys.join(',')}` : undefined,
+          blocker.paths?.length ? `paths=${blocker.paths.join(',')}` : undefined,
+        ].filter(Boolean).join(' · '),
+      } : {}),
     })),
   ];
 }
@@ -708,7 +779,7 @@ function activeCommandLabel(): string {
   const values = program.args.filter((value) => !value.startsWith('-'));
   const top = values[0];
   if (!top) return 'flowctl';
-  const grouped = new Set(['agent', 'graph', 'flows', 'packet', 'review', 'data', 'ground', 'bdd']);
+  const grouped = new Set(['agent', 'graph', 'flows', 'runs', 'packet', 'review', 'data', 'ground', 'bdd']);
   return grouped.has(top) && values[1] ? `${top} ${values[1]}` : top;
 }
 
@@ -736,89 +807,6 @@ async function writeNewFileExclusive(destination: string, contents: string, mode
   } finally {
     await handle.close();
   }
-}
-
-async function doctor(config: FlowctlConfig): Promise<{ check: string; status: 'ok' | 'warning' | 'error'; detail: string }[]> {
-  const checks: { check: string; status: 'ok' | 'warning' | 'error'; detail: string }[] = [];
-  checks.push({ check: 'node', status: Number(process.versions.node.split('.')[0]) >= 20 ? 'ok' : 'error', detail: process.versions.node });
-  for (const [kind, roots] of [['frontend', config.sources.frontend], ['backend', config.sources.backend]] as const) {
-    for (const root of roots) {
-      try {
-        await fs.access(await safeRealDescendantPath(config.projectRoot, root, `${kind} source root`));
-        checks.push({ check: `${kind}:${root}`, status: 'ok', detail: 'source root exists' });
-      } catch {
-        checks.push({ check: `${kind}:${root}`, status: 'error', detail: 'source root is missing, invalid or outside the project root' });
-      }
-    }
-  }
-  try {
-    await fs.access(await safeRealDescendantPath(config.projectRoot, config.graphify.graph, 'Graphify graph'));
-    checks.push({ check: 'graphify', status: 'ok', detail: config.graphify.graph });
-  } catch {
-    checks.push({ check: 'graphify', status: config.graphify.required ? 'error' : 'warning', detail: 'graph is missing, invalid or outside the project root' });
-  }
-  for (const wikiPath of config.wiki.paths) {
-    try {
-      await fs.access(await safeRealDescendantPath(config.projectRoot, wikiPath, 'Wiki evidence root'));
-      checks.push({ check: `wiki:${wikiPath}`, status: 'ok', detail: 'Wiki evidence root exists' });
-    } catch {
-      checks.push({ check: `wiki:${wikiPath}`, status: config.wiki.required ? 'error' : 'warning', detail: 'Wiki evidence root is missing, invalid or outside the project root' });
-    }
-  }
-  checks.push({
-    check: 'runtime:base-url',
-    status: config.runtime.baseUrl ? 'ok' : 'warning',
-    detail: config.runtime.baseUrl ?? 'not configured; static discovery works, runtime grounding is blocked',
-  });
-  if (config.runtime.runner) {
-    const available = await executableAvailable(config.runtime.runner.command, config.projectRoot);
-    checks.push({
-      check: 'runtime:runner',
-      status: available ? 'ok' : 'warning',
-      detail: `${config.runtime.runner.command} · argv/shell-disabled · manifest=${config.runtime.runner.args.some((argument) => argument.includes('{manifest}')) ? 'yes' : 'no'} · observation=${config.runtime.runner.args.some((argument) => argument.includes('{observation}')) ? 'yes' : 'no'} · timeout=${config.runtime.runner.timeoutMs}ms${available ? '' : ' · command not found or not executable'}`,
-    });
-  } else {
-    checks.push({
-      check: 'runtime:runner',
-      status: 'warning',
-      detail: 'not configured; run flowctl ground runner plan before runtime grounding',
-    });
-  }
-  try {
-    const adapters = await loadAdapterManifest(new ArtifactStore(config));
-    checks.push({
-      check: 'runtime:adapter-manifest',
-      status: 'ok',
-      detail: `${config.runtime.adapterManifest} · ${adapters.manifest.adapters.length} statically implemented adapter(s)`,
-    });
-  } catch (error) {
-    checks.push({
-      check: 'runtime:adapter-manifest',
-      status: 'warning',
-      detail: `${error instanceof Error ? error.message : String(error)} Run flowctl ground adapters plan --variant <variant-id>.`,
-    });
-  }
-  return checks;
-}
-
-async function executableAvailable(command: string, cwd: string): Promise<boolean> {
-  const hasSeparator = command.includes('/') || command.includes('\\');
-  const candidates = hasSeparator
-    ? [path.isAbsolute(command) ? command : path.resolve(cwd, command)]
-    : (process.env.PATH ?? '').split(path.delimiter).filter(Boolean).flatMap((directory) => {
-      if (process.platform !== 'win32') return [path.join(directory, command)];
-      const extensions = (process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';');
-      return [path.join(directory, command), ...extensions.map((extension) => path.join(directory, `${command}${extension.toLowerCase()}`))];
-    });
-  for (const candidate of candidates) {
-    try {
-      await fs.access(candidate, process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK);
-      return true;
-    } catch {
-      // Continue searching PATH.
-    }
-  }
-  return false;
 }
 
 async function explain(store: ArtifactStore, kind: string, id: string): Promise<unknown> {

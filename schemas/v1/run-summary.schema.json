@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flowctl.dev/schemas/v1/run-summary.schema.json",
+  "title": "Flowctl run summary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "runId", "kind", "status", "command", "createdAt", "sourceDigest", "summary", "paths"],
+  "properties": {
+    "schemaVersion": { "const": "flowctl.run.v1" },
+    "runId": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["analysis", "grounding"] },
+    "status": { "enum": ["completed", "pending", "recorded", "expired", "stale"] },
+    "command": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "completedAt": { "type": "string", "format": "date-time" },
+    "variantId": { "type": "string" },
+    "environment": { "type": "string" },
+    "sourceDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "summary": { "type": "string", "minLength": 1 },
+    "paths": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "resume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executor", "command"],
+      "properties": {
+        "executor": { "enum": ["agent", "human"] },
+        "command": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

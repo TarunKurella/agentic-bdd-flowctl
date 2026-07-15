@@ -207,14 +207,16 @@ runtime: { environment: local }
       'doctor', '--config', configPath, '--json',
     ], { cwd: path.resolve('.'), encoding: 'utf8' });
     const envelope = JSON.parse(result.stdout) as {
-      result: Array<{ check: string; status: string }>;
+      result: { ready: boolean; checks: Array<{ check: string; status: string; configKeys: string[]; paths: string[] }> };
     };
 
     expect(result.status).toBe(2);
-    expect(envelope.result).toContainEqual({
+    expect(envelope.result.ready).toBe(false);
+    expect(envelope.result.checks).toContainEqual(expect.objectContaining({
       check: 'frontend:../outside',
       status: 'error',
       detail: 'source root is missing, invalid or outside the project root',
-    });
+      configKeys: ['sources.frontend'],
+    }));
   });
 });

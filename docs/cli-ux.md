@@ -17,10 +17,12 @@ The experience is state-driven rather than chat-driven. Conversation is not the 
 ```bash
 flowctl init
 flowctl doctor --config flowctl.config.yaml
-flowctl discover --config flowctl.config.yaml
+flowctl discover --config flowctl.config.yaml --progress jsonl
 ```
 
 `discover` is the onboarding command. It runs static analysis through coverage, prints an evidence/behavior graph summary and ends with the guided lifecycle view. It does not open a browser or invent application data.
+
+`doctor` returns a readiness summary plus structured checks. A non-OK check names its exact `configKeys`, affected `paths` and a safe `fix`; it does not merely say that runtime or source configuration is invalid. Its `paths` object points to the configuration, project/output roots, coverage report, unresolved data requirements, application-data file and run directory.
 
 If analysis has already run, use the smaller inspection commands:
 
@@ -52,6 +54,31 @@ The three lifecycle commands share the same state engine:
 | `flowctl next` | Show only the primary action, its reason and follow-up commands. |
 
 All accept optional `--variant`, `--env`, `--config` and `--json`.
+
+The guide result contains a top-level `paths` object for the coverage report, generated BDD, unresolved data-requirement directory, application-data file and run history. When a variant is selected, `selectedVariant.data.requirementsPath` identifies its exact canonical requirement file. Blockers may carry `configKeys` and `paths` in addition to their stable code and resolution.
+
+## Progress and resumable runs
+
+Long static compilation supports a second machine channel:
+
+```bash
+flowctl discover --json --progress jsonl
+flowctl analyze --through coverage --json --progress jsonl
+```
+
+The final `flowctl.cli.v1` envelope remains the only stdout document. Each stderr line is an independent `flowctl.progress.v1` JSON event with `command`, monotonic `sequence`, event name, timestamp and completed/total stage counts. This makes terminal spinners, IDE status panels and CI log processors possible without making the final JSON ambiguous. The schema is `schemas/v1/progress-event.schema.json`.
+
+Analysis and runtime grounding share one inspection surface:
+
+```bash
+flowctl runs list --limit 20 --json
+flowctl runs show latest --json
+flowctl runs show <run-id> --json
+```
+
+Analysis records point directly to coverage, data requirements and generated BDD. Grounding entries point to the manifest, observation location, runtime bindings and selected variant requirements. A current pending grounding entry includes the exact `ground run` resume command; recorded, expired and stale entries remain inspectable but are not advertised as resumable. `latest` means the newest known analysis or grounding run by creation time.
+
+Each returned entry uses `flowctl.run.v1`; its schema is `schemas/v1/run-summary.schema.json`.
 
 ## Lifecycle state machine
 

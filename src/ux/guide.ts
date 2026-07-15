@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { shellQuote } from '../core/command.js';
+import { safeFileSegment } from '../core/paths.js';
 import { ARTIFACT_FILES, type ArtifactName, type ArtifactStore } from '../core/artifact-store.js';
 import { findLineageIssues } from '../core/freshness.js';
 import { isPacketProposalValidated, nextPacket, type AgentPacket } from '../agent/packets.js';
@@ -60,6 +61,8 @@ export interface GuideBlocker {
   code: string;
   message: string;
   resolution?: string;
+  configKeys?: string[];
+  paths?: string[];
 }
 
 export interface ProjectGuide {
@@ -69,6 +72,15 @@ export interface ProjectGuide {
   phaseReason: string;
   environment: string;
   sourceDigest: string;
+  paths: {
+    config: string;
+    outputRoot: string;
+    coverageReport: string;
+    generatedBdd: string;
+    unresolvedDataRequirements: string;
+    applicationData: string;
+    runs: string;
+  };
   progress: {
     readyArtifacts: number;
     totalArtifacts: number;
@@ -106,6 +118,8 @@ export interface ProjectGuide {
       verified: number;
       unverified: number;
       missing: number;
+      requirementsPath: string;
+      applicationDataPath: string;
     };
     runtime: {
       groundedActorSessions: number;
@@ -269,12 +283,18 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
       blocking: true,
       priority: 0,
     });
-    blockers.push({ code: state === 'stale' ? 'STATIC_MODEL_STALE' : 'STATIC_MODEL_INCOMPLETE', message: `${incomplete.file} is ${state}.`, resolution: `Run flowctl analyze --through coverage ${configArgument}` });
+    blockers.push({
+      code: state === 'stale' ? 'STATIC_MODEL_STALE' : 'STATIC_MODEL_INCOMPLETE',
+      message: `${incomplete.file} is ${state}.`,
+      resolution: `Run flowctl analyze --through coverage ${configArgument}`,
+      paths: [store.artifactPath(incomplete.name)],
+    });
   } else if (uncoveredOperations.length) {
     blockers.push({
       code: 'IN_SCOPE_OPERATIONS_UNCOVERED',
       message: `${uncoveredOperations.length} in-scope operation(s) have no complete source-supported entry-to-success witness.`,
       resolution: `Run flowctl coverage ${configArgument} and repair the reported join stage before claiming complete happy-flow discovery.`,
+      paths: [store.artifactPath('coverage')],
     });
     actions.push({
       id: 'inspect-operation-coverage',
@@ -287,7 +307,13 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
       priority: 20,
     });
   } else if (!availableVariants.length) {
-    blockers.push({ code: 'NO_SUCCESSFUL_VARIANTS', message: 'No successful source-supported variant was found within the configured bounds.', resolution: `Run flowctl coverage ${configArgument} and inspect unresolved diagnostics.` });
+    blockers.push({
+      code: 'NO_SUCCESSFUL_VARIANTS',
+      message: 'No successful source-supported variant was found within the configured bounds.',
+      resolution: `Run flowctl coverage ${configArgument} and inspect unresolved diagnostics.`,
+      configKeys: ['analysis.entryRoutes', 'analysis.maxPathDepth', 'analysis.maxStateVisits'],
+      paths: [store.artifactPath('coverage')],
+    });
     actions.push({
       id: 'inspect-coverage',
       kind: 'inspect',
@@ -447,6 +473,8 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
         verified: data.verified.length,
         unverified: data.unverified.length,
         missing: data.missing.length,
+        requirementsPath: path.join(store.dataRequirementsDirectory, `${safeFileSegment(variant.id, 'Variant ID')}.yaml`),
+        applicationDataPath: store.config.applicationDataPath,
       },
       runtime: {
         groundedActorSessions: Math.max(0, actorSessionStepCount - missingActorSessionIds.length),
@@ -496,6 +524,7 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
         code: 'CONDITIONAL_FLOW_REVIEW_REQUIRED',
         message: `${variant.id} contains unresolved source semantics and cannot enter data/runtime execution.`,
         resolution: 'Inspect the proof and coverage diagnostics, improve source/adapters or provide reviewed evidence, then rerun discover.',
+        paths: [featurePath, store.artifactPath('coverage')],
       });
     } else if (!data.ready) {
       actions.push({
@@ -519,6 +548,7 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
           code: `DATA_REQUIRED:${item.id}`,
           message: `${item.fieldPath} requires ${item.classification}.`,
           resolution: `Use one approved strategy: ${item.strategies.join(', ')}.`,
+          paths: [path.join(store.dataRequirementsDirectory, `${safeFileSegment(variant.id, 'Variant ID')}.yaml`), store.config.applicationDataPath],
         });
       }
       for (const item of data.unverified) {
@@ -526,6 +556,7 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
           code: `DATA_CONFIRMATION_REQUIRED:${item.id}`,
           message: `${item.fieldPath} is bound as ${item.alias}, but the binding is not confirmed.`,
           resolution: `A named human must review the binding and run flowctl data confirm --requirement ${quote(item.id)} --reviewer <corporate-id> ${configArgument}.`,
+          paths: [store.config.applicationDataPath],
         });
       }
     } else if (!adapterResult.value) {
@@ -547,6 +578,8 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
         code: 'RUNTIME_ADAPTERS_REQUIRED',
         message: adapterResult.error ?? 'The application-specific Playwright adapter registry is missing.',
         resolution: 'Run the adapter plan to obtain exact target inventory and safe scaffold files, implement every callable adapter, configure runtime.adapterManifest, then run the adapter verifier.',
+        configKeys: ['runtime.adapterManifest'],
+        paths: [store.config.configPath],
       });
     } else if (runtimeContractError) {
       actions.push({
@@ -603,6 +636,8 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
         code: 'RUNTIME_RUNNER_REQUIRED',
         message: 'No no-shell external Playwright runner protocol is configured.',
         resolution: 'A human must review the runner plan, configure the trusted command plus argv placeholders {manifest}/{observation} and minimal envAllowlist, then rerun the guide.',
+        configKeys: ['runtime.runner.command', 'runtime.runner.args', 'runtime.runner.timeoutMs', 'runtime.runner.envAllowlist'],
+        paths: [store.config.configPath],
       });
     } else if (hasMissingRuntimeTargets) {
       if (pendingGrounding) {
@@ -621,6 +656,7 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
           code: 'RUNTIME_BINDINGS_REQUIRED',
           message: `${missingActorSessionIds.length} actor-session, ${missingScreenStateIds.length} screen-state, ${missingFieldIds.length} field and ${missingActionIds.length} action target(s) are not grounded in ${environment}.`,
           resolution: `Run the configured no-shell external runner against valid manifest ${manifestPath}; flowctl ground run validates and records its observation atomically.`,
+          paths: [pendingGrounding.path, pendingGrounding.observationPath, store.artifactPath('runtime')],
         });
       } else {
         actions.push({
@@ -637,6 +673,7 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
           code: 'RUNTIME_BINDINGS_REQUIRED',
           message: `${missingActorSessionIds.length} actor-session, ${missingScreenStateIds.length} screen-state, ${missingFieldIds.length} field and ${missingActionIds.length} action target(s) are not grounded in ${environment}.`,
           resolution: 'Prepare one bounded Playwright-adapter grounding run, execute its registered adapters in order, and record schema-valid observations.',
+          paths: [path.join(store.workDirectory, 'runtime'), store.artifactPath('runtime')],
         });
       }
     } else if (bddGenerated && !executionPlanCurrent) {
@@ -672,6 +709,15 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
     phaseReason: phaseReason(phase, selectedVariant, availableVariants.length),
     environment,
     sourceDigest: currentSourceDigest,
+    paths: {
+      config: store.config.configPath,
+      outputRoot: store.config.outputRoot,
+      coverageReport: store.artifactPath('coverage'),
+      generatedBdd: store.generatedDirectory,
+      unresolvedDataRequirements: store.dataRequirementsDirectory,
+      applicationData: store.config.applicationDataPath,
+      runs: path.join(store.config.outputRoot, 'runs'),
+    },
     progress: {
       readyArtifacts: artifacts.filter((artifact) => artifact.exists && artifact.status !== 'stale').length,
       totalArtifacts: artifacts.length,
@@ -700,7 +746,11 @@ export function buildAgentPrompt(guide: ProjectGuide): string {
       ? `\n${action.followUpCommands.map((command) => `   Then: ${command}`).join('\n')}`
       : ''}`;
   });
-  const blockerLines = guide.blockers.map((blocker) => `- ${blocker.code}: ${blocker.message}${blocker.resolution ? ` Resolution: ${blocker.resolution}` : ''}`);
+  const blockerLines = guide.blockers.map((blocker) => [
+    `- ${blocker.code}: ${blocker.message}${blocker.resolution ? ` Resolution: ${blocker.resolution}` : ''}`,
+    ...(blocker.configKeys?.length ? [`  Exact config keys: ${blocker.configKeys.join(', ')}`] : []),
+    ...(blocker.paths?.length ? blocker.paths.map((value) => `  Path: ${value}`) : []),
+  ].join('\n'));
   return [
     'You are the bounded Flowctl operator for this repository.',
     '',
@@ -758,7 +808,11 @@ export function renderProjectGuide(guide: ProjectGuide): string {
   }
   if (guide.blockers.length) {
     lines.push('', 'BLOCKERS');
-    guide.blockers.slice(0, 8).forEach((blocker) => lines.push(`- ${blocker.message}${blocker.resolution ? ` ${blocker.resolution}` : ''}`));
+    guide.blockers.slice(0, 8).forEach((blocker) => {
+      lines.push(`- ${blocker.code}: ${blocker.message}${blocker.resolution ? ` ${blocker.resolution}` : ''}`);
+      if (blocker.configKeys?.length) lines.push(`  Config: ${blocker.configKeys.join(', ')}`);
+      blocker.paths?.forEach((value) => lines.push(`  Path: ${value}`));
+    });
   }
   lines.push('', 'NEXT ACTIONS');
   if (!guide.nextActions.length) lines.push('No action required.');
@@ -768,7 +822,18 @@ export function renderProjectGuide(guide: ProjectGuide): string {
     lines.push(`   ${action.executor === 'human' ? 'Human command (agent must stop): ' : ''}${action.command}`);
     action.followUpCommands?.forEach((command) => lines.push(`   Then: ${command}`));
   });
-  lines.push('', 'AGENT HANDOFF', `Resume: ${guide.agentGuideCommand}`, `Prompt: ${guide.agentPromptCommand}`);
+  lines.push(
+    '',
+    'OUTPUTS',
+    `Coverage: ${guide.paths.coverageReport}`,
+    `Unresolved data: ${guide.selectedVariant?.data.requirementsPath ?? guide.paths.unresolvedDataRequirements}`,
+    `Generated BDD: ${guide.paths.generatedBdd}`,
+    `Runs: ${guide.paths.runs}`,
+    '',
+    'AGENT HANDOFF',
+    `Resume: ${guide.agentGuideCommand}`,
+    `Prompt: ${guide.agentPromptCommand}`,
+  );
   return lines.join('\n');
 }
 

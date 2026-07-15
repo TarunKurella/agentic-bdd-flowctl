@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flowctl.dev/schemas/v1/progress-event.schema.json",
+  "title": "Flowctl progress event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "event", "timestamp", "completed", "total", "message", "command", "sequence"],
+  "properties": {
+    "schemaVersion": { "const": "flowctl.progress.v1" },
+    "event": { "enum": ["analysis.started", "stage.completed", "analysis.completed"] },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "stage": { "enum": ["evidence", "operations", "contracts", "behavior", "families", "witnesses", "variants", "data", "coverage"] },
+    "completed": { "type": "integer", "minimum": 0 },
+    "total": { "type": "integer", "minimum": 1 },
+    "message": { "type": "string", "minLength": 1 },
+    "command": { "enum": ["analyze", "discover"] },
+    "sequence": { "type": "integer", "minimum": 1 }
+  }
+}

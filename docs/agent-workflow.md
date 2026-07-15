@@ -12,11 +12,13 @@ From a configured repository:
 
 ```bash
 flowctl doctor --json
-flowctl discover --json
+flowctl discover --json --progress jsonl
 flowctl flows list --json
 ```
 
 `discover` runs the deterministic pipeline through coverage, summarizes the evidence and behavior graphs, and returns the next safe actions. It is the preferred first command for a new repository; `analyze --through <stage>` remains useful for compiler development and targeted diagnostics.
+
+When `--progress jsonl` is enabled, progress events are emitted on stderr and the final CLI envelope remains on stdout. An assistant or extension may render those events but must continue to make decisions only from the final envelope and lifecycle state.
 
 After flow discovery, select one variant and environment:
 
@@ -229,6 +231,8 @@ Always add `--json` when an assistant consumes output. Successful and failed com
 - the process exit code for invalid input, review, data, runtime, stale, security and not-found gates.
 
 Human-readable output is optimized for terminals and may change without breaking the JSON contract. See [CLI and agentic UX](cli-ux.md).
+
+Use `flowctl runs list --json` and `flowctl runs show latest --json` to recover after context loss. A run result exposes exact report/artifact paths and, only when safe, an explicit resume command. Do not resume a grounding entry whose status is `expired` or `stale`.
 
 ## Security and stopping rules
 

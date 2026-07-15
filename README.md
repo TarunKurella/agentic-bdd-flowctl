@@ -58,6 +58,10 @@ node --import tsx src/cli.ts flows list \
   --config examples/account-opening/flowctl.config.yaml
 node --import tsx src/cli.ts agent guide \
   --config examples/account-opening/flowctl.config.yaml --json
+
+# Inspect the latest compiler/runtime run and its exact output paths.
+node --import tsx src/cli.ts runs show latest \
+  --config examples/account-opening/flowctl.config.yaml
 ```
 
 The proof fixture currently discovers two materially different submission journeys—personal and joint—not permutations of every possible input value. Generated files appear under `examples/account-opening/.flowctl/` and remain untracked.
@@ -71,6 +75,26 @@ node --import tsx src/cli.ts agent guide --config flowctl.config.yaml --json
 ```
 
 `agent guide` is the control loop. It reports the current phase, blockers and ordered `nextActions`. An assistant performs only the first applicable action, reruns the guide, and stops whenever `executor: human` is returned.
+
+`doctor` and `guide` do not leave you with generic advice. Their JSON includes exact configuration keys, concrete paths and safe commands for each blocker. `guide.paths` points directly to coverage, generated BDD, unresolved data requirements, application data and run history; a selected variant also exposes its exact requirement file.
+
+Long analysis can stream progress without corrupting the final JSON response:
+
+```bash
+flowctl discover --json --progress jsonl
+```
+
+The final `flowctl.cli.v1` envelope stays on stdout. Versioned `flowctl.progress.v1` JSONL events go to stderr, so an IDE, CI wrapper or VS Code assistant can show live progress while parsing the result safely.
+
+Every analysis/discovery run is recorded, and runtime grounding manifests appear in the same read-only run view:
+
+```bash
+flowctl runs list --limit 20
+flowctl runs show latest
+flowctl runs show <run-id>
+```
+
+Run details include status, report/artifact paths and an exact resume command when resumption is safe. Expired or stale grounding runs are visible but are never offered as resumable.
 
 After `npm run build`, use `node dist/src/cli.js ...` as the repository-local production launcher. If the package is deliberately linked onto `PATH`, shorten it to `flowctl ...`; no global installation is required.
 
@@ -393,8 +417,8 @@ More focused prompts for onboarding, semantic packets, test-data resolution, BDD
 ```text
 flowctl init
 flowctl doctor
-flowctl analyze [--through <stage>]
-flowctl discover
+flowctl analyze [--through <stage>] [--progress jsonl]
+flowctl discover [--progress jsonl]
 flowctl status [--variant <id>] [--env <environment>]
 flowctl next [--variant <id>] [--env <environment>]
 flowctl guide [--variant <id>] [--env <environment>]
@@ -403,6 +427,9 @@ flowctl flows list
 flowctl flows show <variant-id>
 flowctl graph summary
 flowctl graph trace <variant-id>
+
+flowctl runs list [--limit <count>]
+flowctl runs show <run-id|latest>
 
 flowctl agent guide [--variant <id>] [--env <environment>]
 flowctl agent prompt [--variant <id>] [--env <environment>]
@@ -430,7 +457,7 @@ flowctl coverage
 flowctl explain <kind> <id>
 ```
 
-Project commands accept `--config <path>` and `--json`; `init` instead accepts its destination directory. Machine output uses one stable `flowctl.cli.v1` envelope containing `command`, `ok`, `code`, optional project/target context, `result`, `nextActions` and `diagnostics`. Scripts should use the envelope and process exit code rather than scrape human prose.
+Project commands accept `--config <path>` and `--json`; `init` instead accepts its destination directory. Machine output uses one stable `flowctl.cli.v1` envelope containing `command`, `ok`, `code`, optional project/target context, `result`, `nextActions` and `diagnostics`. `analyze` and `discover` additionally accept `--progress jsonl`, which writes `flowctl.progress.v1` events to stderr while reserving stdout for the final envelope. Scripts should use these contracts and the process exit code rather than scrape human prose.
 
 ## Repository layout
 
