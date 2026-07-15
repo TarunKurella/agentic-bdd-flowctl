@@ -67,6 +67,37 @@ describe('graph proof soundness', () => {
     expect(result.witnesses[0]?.edgePath.at(-1)).toBe('edge.success');
   });
 
+  it('does not create a distinct happy-path witness from a navigation-only screen detour', () => {
+    const graph: BehaviorGraph = {
+      nodes: [
+        { id: 'screen.entry', kind: 'screen-state', label: 'Entry', attributes: {} },
+        { id: 'action.home', kind: 'action', label: 'Home', attributes: {} },
+        { id: 'action.submit', kind: 'action', label: 'Submit', attributes: {} },
+        { id: 'operation.submit', kind: 'operation', label: 'Submit', referenceId: 'operation.submit', attributes: {} },
+        { id: 'screen.success', kind: 'screen-state', label: 'Success', attributes: {} },
+      ],
+      edges: [
+        { id: 'edge.home-action', from: 'screen.entry', to: 'action.home', guard: { kind: 'constant', value: true }, effects: [], outcome: 'neutral', evidenceRefs: [] },
+        { id: 'edge.home-return', from: 'action.home', to: 'screen.entry', guard: { kind: 'constant', value: true }, effects: [{ kind: 'navigate', target: '/' }], outcome: 'neutral', evidenceRefs: [] },
+        { id: 'edge.submit-action', from: 'screen.entry', to: 'action.submit', guard: { kind: 'constant', value: true }, effects: [], outcome: 'neutral', evidenceRefs: [] },
+        { id: 'edge.operation', from: 'action.submit', to: 'operation.submit', guard: { kind: 'constant', value: true }, effects: [], outcome: 'neutral', evidenceRefs: [] },
+        { id: 'edge.success', from: 'operation.submit', to: 'screen.success', guard: { kind: 'constant', value: true }, effects: [], outcome: 'success', evidenceRefs: [] },
+      ],
+      entryNodeIds: ['screen.entry'],
+      successNodeIds: ['screen.success'],
+    };
+    const families: FlowFamilies = { families: [{
+      id: 'application.submit', label: 'Submit application', operationIds: ['operation.submit'],
+      entryNodeIds: ['screen.entry'], successNodeIds: ['screen.success'], actorRequirementIds: [], evidenceRefs: [],
+    }] };
+    const config = { analysis: { entryRoutes: ['/'], maxPathDepth: 10, maxStateVisits: 2 } } as FlowctlConfig;
+
+    const result = searchPaths(graph, families, config);
+
+    expect(result.witnesses).toHaveLength(1);
+    expect(result.witnesses[0]?.actionSequence).toEqual(['action.submit']);
+  });
+
   it('keeps a shortcut that skips a request-bound field review-only', () => {
     const graph: BehaviorGraph = {
       nodes: [

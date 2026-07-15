@@ -21,6 +21,7 @@ import { normalizeFlowctlError } from './core/errors.js';
 import { shellQuote } from './core/command.js';
 import { failureEnvelope, successEnvelope } from './ux/cli-envelope.js';
 import { inspectProjectHealth, renderDoctor } from './ux/doctor.js';
+import { buildSourceRepairPlan, renderSourceRepairPlan } from './ux/source-repair.js';
 import { listRuns, renderRun, renderRunList, showRun } from './ux/runs.js';
 import {
   buildAgentPrompt,
@@ -560,6 +561,21 @@ withConfig(program.command('coverage').description('Show the current coverage an
     const store = new ArtifactStore(await loadConfig(options.config));
     if (!(await store.exists('coverage'))) await analyze(store.config, 'coverage');
     print((await store.read<CoverageReport>('coverage')).data, options.json);
+  });
+
+const repair = program.command('repair').description('Prepare bounded source-repair work when a complete witness cannot be built.');
+withConfig(repair.command('plan').description('Show exact missing joins with their source evidence and diagnostics.'))
+  .action(async (options: ConfigOptions) => {
+    const store = new ArtifactStore(await loadConfig(options.config));
+    if (!(await store.exists('coverage'))) await analyze(store.config, 'coverage');
+    const plan = await buildSourceRepairPlan(store);
+    print(plan, options.json, renderSourceRepairPlan(plan), {
+      command: 'repair plan',
+      code: plan.status === 'source-repair-required' ? 'SOURCE_REPAIR_REQUIRED' : 'OK',
+      sourceDigest: plan.sourceDigest,
+      config: store.config,
+      diagnostics: plan.gaps.flatMap((gap) => gap.diagnostics),
+    });
   });
 
 withConfig(program.command('explain <kind> <id>').description('Explain an evidence, operation, page, family, flow variant or witness.'))

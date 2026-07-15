@@ -35,6 +35,12 @@ interface MethodCandidate {
   annotations: AnnotationCandidate[];
   body: string;
   validationActivation: ValidationActivation;
+  parameterCount: number;
+}
+
+interface ResolvedJavaMethod {
+  file: SourceFile;
+  method: MethodCandidate;
 }
 
 type ValidationActivation =
@@ -55,6 +61,7 @@ export function extractJava(files: SourceFile[]): JavaExtraction {
   const ambiguousTypes = new Set<string>();
   const ambiguousEnums = new Set<string>();
   const methodsByFile = new Map(javaFiles.map((file) => [file.relativePath, extractMethods(file)]));
+  const globalSecurity = extractGlobalSpringSecurity(javaFiles);
   const requestTypes = new Set([...methodsByFile.values()].flatMap((methods) => (
     methods.flatMap((method) => method.requestType ? [method.requestType] : [])
   )));
@@ -110,7 +117,10 @@ export function extractJava(files: SourceFile[]): JavaExtraction {
       if (!mapping) continue;
       const endpointPath = normalizeRoute(`${classPrefix}/${mapping.path}`);
       const endpointId = stableId('java-endpoint', `${mapping.method}:${endpointPath}:${className}.${candidate.name}`);
-      const authorization = extractAuthorization(file, candidate, classSecurity);
+      let authorization = extractAuthorization(file, candidate, classSecurity);
+      if (authorization.fact.status === 'conditional' && authorization.fact.sourceExpression === 'unannotated-endpoint') {
+        authorization = resolveGlobalSpringAuthorization(globalSecurity, endpointPath) ?? authorization;
+      }
       const endpointPermissionIds: string[] = [];
 
       for (const authority of authorization.authorities) {
@@ -135,18 +145,16 @@ export function extractJava(files: SourceFile[]): JavaExtraction {
 
       const entity = inferEntity(candidate.requestType, className, endpointPath);
       const directEffects = extractEffects(file, candidate, mapping.method, entity);
-      const delegatedTarget = directEffects.every((effect) => effect.kind === 'unknown-mutation')
-        ? resolveDelegatedMethod(javaFiles, file, candidate)
-        : undefined;
-      const delegatedEffects = delegatedTarget
-        ? extractEffects(delegatedTarget.file, delegatedTarget.method, mapping.method, entity).filter((effect) => effect.kind !== 'unknown-mutation')
+      const delegatedTargets = directEffects.every((effect) => effect.kind === 'unknown-mutation')
+        ? resolveDelegatedMethods(javaFiles, methodsByFile, file, candidate)
         : [];
+      const delegatedEffects = delegatedTargets
+        .flatMap((target) => extractEffects(target.file, target.method, mapping.method, entity))
+        .filter((effect) => effect.kind !== 'unknown-mutation');
       const methodEffects = delegatedEffects.length ? delegatedEffects : directEffects;
       const domainGuard = allPredicates([
         extractDomainGuard(file, candidate),
-        ...(delegatedEffects.length && delegatedTarget
-          ? [extractDomainGuard(delegatedTarget.file, delegatedTarget.method)]
-          : []),
+        ...delegatedTargets.map((target) => extractDomainGuard(target.file, target.method)),
         ...(candidate.requestType && (ambiguousTypes.has(candidate.requestType) || ambiguousEnums.has(candidate.requestType))
           ? [{
               kind: 'opaque' as const,
@@ -249,6 +257,7 @@ function extractMethods(file: SourceFile): MethodCandidate[] {
         annotations: [...annotations],
         body,
         validationActivation: requestBinding.validationActivation,
+        parameterCount: splitTopLevelJavaParameters(signature[4] ?? '').length,
       });
       annotations = [];
       index = signatureSource!.endIndex;
@@ -380,6 +389,102 @@ function classSecurityAnnotations(file: SourceFile): AnnotationCandidate[] {
     annotations = [];
   }
   return [];
+}
+
+interface GlobalSpringSecurityRule {
+  paths: string[] | 'any';
+  access: 'permit-all' | 'authenticated' | 'authorities';
+  authorities: string[];
+  sourceRef: SourceRef;
+  sourceExpression: string;
+}
+
+function extractGlobalSpringSecurity(files: SourceFile[]): GlobalSpringSecurityRule[] | undefined {
+  const candidates = files.filter((file) => (
+    /\bSecurityFilterChain\b/.test(file.contents)
+    && /\.authorizeHttpRequests\s*\(/.test(file.contents)
+  ));
+  if (candidates.length !== 1) return undefined;
+  const file = candidates[0]!;
+  if (/\.securityMatcher\s*\(/.test(file.contents)) return undefined;
+  const rules: GlobalSpringSecurityRule[] = [];
+  const matcher = /\.(requestMatchers|anyRequest)\s*\(([^)]*)\)\s*\.\s*(permitAll|authenticated|hasAuthority|hasRole)\s*\(([^)]*)\)/gs;
+  for (const match of file.contents.matchAll(matcher)) {
+    const selector = match[1];
+    const selectorArguments = match[2] ?? '';
+    const method = match[3];
+    const accessArguments = match[4] ?? '';
+    if (!selector || !method || match.index === undefined) continue;
+    const paths = selector === 'anyRequest'
+      ? 'any' as const
+      : [...selectorArguments.matchAll(/["']([^"']+)["']/g)].map((value) => normalizeRoute(value[1]!));
+    if (paths !== 'any' && !paths.length) continue;
+    const literal = accessArguments.match(/["']([^"']+)["']/)?.[1];
+    const authorities = method === 'hasRole' && literal
+      ? [literal.startsWith('ROLE_') ? literal : `ROLE_${literal}`]
+      : method === 'hasAuthority' && literal ? [literal] : [];
+    if ((method === 'hasRole' || method === 'hasAuthority') && !authorities.length) continue;
+    const line = file.contents.slice(0, match.index).split(/\r?\n/).length;
+    const sourceExpression = match[0].replace(/\s+/g, ' ');
+    rules.push({
+      paths,
+      access: method === 'permitAll' ? 'permit-all' : method === 'authenticated' ? 'authenticated' : 'authorities',
+      authorities,
+      sourceRef: ref(file, line, 'SecurityFilterChain', sourceExpression),
+      sourceExpression,
+    });
+  }
+  return rules.length ? rules : undefined;
+}
+
+function resolveGlobalSpringAuthorization(
+  rules: GlobalSpringSecurityRule[] | undefined,
+  endpointPath: string,
+): { fact: JavaAuthorizationFact; authorities: string[] } | undefined {
+  if (!rules) return undefined;
+  const rule = rules.find((candidate) => (
+    candidate.paths === 'any' || candidate.paths.some((pattern) => springSecurityPathMatches(pattern, endpointPath))
+  ));
+  if (!rule) return undefined;
+  if (rule.access === 'permit-all') {
+    return {
+      fact: {
+        status: 'anonymous',
+        sourceExpression: rule.sourceExpression,
+        sourceRefs: [rule.sourceRef],
+      },
+      authorities: [],
+    };
+  }
+  if (rule.access === 'authenticated') {
+    return {
+      fact: {
+        status: 'authenticated',
+        sourceExpression: rule.sourceExpression,
+        sourceRefs: [rule.sourceRef],
+      },
+      authorities: [],
+    };
+  }
+  return {
+    fact: {
+      status: 'exact',
+      sourceExpression: rule.sourceExpression,
+      sourceRefs: [rule.sourceRef],
+    },
+    authorities: rule.authorities,
+  };
+}
+
+function springSecurityPathMatches(pattern: string, endpointPath: string): boolean {
+  const normalizedPattern = normalizeRoute(pattern);
+  const normalizedEndpoint = normalizeRoute(endpointPath);
+  if (normalizedPattern === normalizedEndpoint) return true;
+  if (normalizedPattern.endsWith('/**')) {
+    const prefix = normalizedPattern.slice(0, -3);
+    return normalizedEndpoint === prefix || normalizedEndpoint.startsWith(`${prefix}/`);
+  }
+  return false;
 }
 
 function extractAuthorization(
@@ -600,30 +705,95 @@ function parseAuthorityConjunction(expression: string): string[] | undefined {
   return [...new Set(authorities)].sort();
 }
 
-function resolveDelegatedMethod(
+function resolveDelegatedMethods(
   files: SourceFile[],
+  methodsByFile: Map<string, MethodCandidate[]>,
   callerFile: SourceFile,
   caller: MethodCandidate,
-): { file: SourceFile; method: MethodCandidate } | undefined {
-  const calls = [...caller.body.matchAll(/\breturn\s+([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/g)];
-  const matches: Array<{ file: SourceFile; method: MethodCandidate }> = [];
-  for (const call of calls) {
-    const receiver = call[1];
-    const calledMethod = call[2];
-    if (!receiver || !calledMethod) continue;
-    const receiverType = callerFile.contents.match(new RegExp(`\\b([A-Z][A-Za-z0-9_$]*)\\s+${escapeRegex(receiver)}\\b`))?.[1];
-    if (!receiverType) continue;
-    const targetFiles = files.filter((file) => (
-      file.contents.match(/\b(?:class|record)\s+(\w+)/)?.[1] === receiverType
-    ));
-    if (targetFiles.length !== 1) continue;
-    const targetFile = targetFiles[0]!;
-    const target = extractMethods(targetFile).find((candidate) => candidate.name === calledMethod);
-    if (!target) continue;
-    if (!caller.responseType || !target.responseType || normalizeJavaType(caller.responseType) !== normalizeJavaType(target.responseType)) continue;
-    matches.push({ file: targetFile, method: target });
+  maxDepth = 6,
+  maxMethods = 80,
+): ResolvedJavaMethod[] {
+  const resolved: ResolvedJavaMethod[] = [];
+  const visited = new Set([javaMethodKey(callerFile, caller)]);
+  let frontier: ResolvedJavaMethod[] = [{ file: callerFile, method: caller }];
+
+  for (let depth = 0; depth < maxDepth && frontier.length && resolved.length < maxMethods; depth += 1) {
+    const next: ResolvedJavaMethod[] = [];
+    for (const current of frontier) {
+      for (const call of extractReceiverCalls(current.method.body)) {
+        const receiverType = resolveReceiverType(current.file, call.receiver);
+        if (!receiverType) continue;
+        const targetFiles = resolveTargetFiles(files, receiverType);
+        const candidates = targetFiles.flatMap((targetFile) => (
+          (methodsByFile.get(targetFile.relativePath) ?? [])
+            .filter((method) => method.name === call.method && method.parameterCount === call.argumentCount)
+            .map((method) => ({ file: targetFile, method }))
+        ));
+        if (candidates.length !== 1) continue;
+        const target = candidates[0]!;
+        const key = javaMethodKey(target.file, target.method);
+        if (visited.has(key)) continue;
+        visited.add(key);
+        resolved.push(target);
+        next.push(target);
+        if (resolved.length >= maxMethods) break;
+      }
+      if (resolved.length >= maxMethods) break;
+    }
+    frontier = next;
   }
-  return matches.length === 1 ? matches[0] : undefined;
+  return resolved;
+}
+
+function extractReceiverCalls(body: string): Array<{ receiver: string; method: string; argumentCount: number }> {
+  const calls: Array<{ receiver: string; method: string; argumentCount: number }> = [];
+  const matcher = /\b([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\s*\(/g;
+  let match: RegExpExecArray | null;
+  while ((match = matcher.exec(body))) {
+    const receiver = match[1];
+    const method = match[2];
+    if (!receiver || !method) continue;
+    const open = body.indexOf('(', match.index + match[0].length - 1);
+    const close = matchingDelimiter(body, open, '(', ')');
+    if (open < 0 || close < 0) continue;
+    const argumentsSource = body.slice(open + 1, close).trim();
+    calls.push({
+      receiver,
+      method,
+      argumentCount: argumentsSource ? splitTopLevelJavaParameters(argumentsSource).length : 0,
+    });
+    matcher.lastIndex = close + 1;
+  }
+  return calls;
+}
+
+function resolveReceiverType(file: SourceFile, receiver: string): string | undefined {
+  const declaration = file.contents.match(new RegExp(`\\b([A-Z][A-Za-z0-9_$.]*(?:\\s*<[^;=(){}]+>)?)\\s+${escapeRegex(receiver)}\\b`))?.[1];
+  return declaration ? simpleJavaType(declaration) : undefined;
+}
+
+function resolveTargetFiles(files: SourceFile[], receiverType: string): SourceFile[] {
+  const exact = files.filter((file) => declaredJavaType(file) === receiverType);
+  if (exact.length === 1 && !/\binterface\s+/.test(exact[0]!.contents)) return exact;
+  const implementations = files.filter((file) => implementedJavaTypes(file).includes(receiverType));
+  return implementations.length ? implementations : exact;
+}
+
+function declaredJavaType(file: SourceFile): string | undefined {
+  return file.contents.match(/\b(?:class|record|interface)\s+([A-Za-z_$][\w$]*)/)?.[1];
+}
+
+function implementedJavaTypes(file: SourceFile): string[] {
+  const clause = file.contents.match(/\bclass\s+[A-Za-z_$][\w$]*(?:\s+extends\s+[^\s{]+)?\s+implements\s+([^\{]+)/)?.[1];
+  return clause ? clause.split(',').map(simpleJavaType).filter(Boolean) : [];
+}
+
+function simpleJavaType(value: string): string {
+  return value.trim().replace(/<.*>/s, '').split('.').pop()?.trim() ?? value.trim();
+}
+
+function javaMethodKey(file: SourceFile, method: MethodCandidate): string {
+  return `${file.relativePath}:${method.name}/${method.parameterCount}`;
 }
 
 function extractDomainGuard(file: SourceFile, candidate: MethodCandidate): Predicate {
@@ -840,10 +1010,6 @@ function stripJavaCommentsPreservingLiterals(source: string): string {
     } else result += character;
   }
   return result;
-}
-
-function normalizeJavaType(value: string): string {
-  return value.replace(/\s+/g, '').replace(/^ResponseEntity<(.+)>$/, '$1');
 }
 
 function methodBody(lines: string[], startIndex: number): string {
@@ -1300,7 +1466,7 @@ function extractEffects(file: SourceFile, candidate: MethodCandidate, method: st
       sourceRef: ref(file, candidate.line, candidate.name, `${method} persists ${entity}`),
     });
   }
-  const deletion = topLevelMatch(candidate.body, /\b([A-Za-z_$][\w$]*)\.(?:delete|remove)\s*\(\s*(new\s+[A-Z][\w$]*|[A-Za-z_$][\w$]*)/);
+  const deletion = topLevelMatch(candidate.body, /\b([A-Za-z_$][\w$]*)\.(?:delete|deleteById|remove)\s*\(\s*(new\s+[A-Z][\w$]*|[A-Za-z_$][\w$]*)/);
   const deletedEntity = deletion?.[2] ? entityForExpression(file, candidate, deletion[2], deletion[1]) : undefined;
   if (method === 'DELETE' && deletion && deletedEntity && sameEntity(deletedEntity, entity) && !results.length) {
     results.push({
@@ -1320,6 +1486,18 @@ function extractEffects(file: SourceFile, candidate: MethodCandidate, method: st
       sourceRef: ref(file, candidate.line, candidate.name),
     });
   }
+  const authenticationSessionIssued = method === 'POST'
+    && /\b(?:generateToken|createToken|issueToken)\s*\(/.test(candidate.body)
+    && /\b(?:HttpStatus\.OK|ResponseEntity\.ok\s*\()/.test(candidate.body)
+    && /\btoken\b/i.test(candidate.body);
+  if (authenticationSessionIssued && !results.length) {
+    results.push({
+      id: stableId('terminal-effect', `${file.relativePath}:${candidate.name}:authentication-session-issued`),
+      entity: candidate.responseType ?? entity,
+      kind: 'authentication-session-issued',
+      sourceRef: ref(file, candidate.line, candidate.name, 'successful authentication response issues a token'),
+    });
+  }
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) && !results.length) {
     results.push({
       id: stableId('terminal-effect', `${file.relativePath}:${candidate.name}:${entity}:unknown`),
@@ -1337,19 +1515,24 @@ function entityForExpression(
   expression: string,
   repositoryReceiver?: string,
 ): string | undefined {
+  if (repositoryReceiver) {
+    const repositoryType = file.contents.match(new RegExp(`\\b([A-Z][A-Za-z0-9_$]*)Repository\\s+${escapeRegex(repositoryReceiver)}\\b`))?.[1]
+      ?? file.contents.match(new RegExp(`\\b(?:Repository|CrudRepository|JpaRepository)\\s*<\\s*([A-Z][A-Za-z0-9_$]*)[^>]*>\\s+${escapeRegex(repositoryReceiver)}\\b`))?.[1];
+    if (repositoryType) return repositoryType;
+  }
   const constructed = expression.match(/^new\s+([A-Z][\w$]*)/)?.[1];
   if (constructed) return constructed;
   const identifier = expression.trim();
   const declared = candidate.body.match(new RegExp(`\\b([A-Z][A-Za-z0-9_$]*)\\s+${escapeRegex(identifier)}\\b`))?.[1];
   if (declared) return declared;
-  if (!repositoryReceiver) return undefined;
-  const repositoryType = file.contents.match(new RegExp(`\\b([A-Z][A-Za-z0-9_$]*)Repository\\s+${escapeRegex(repositoryReceiver)}\\b`))?.[1];
-  if (repositoryType) return repositoryType;
-  return file.contents.match(new RegExp(`\\b(?:Repository|CrudRepository|JpaRepository)\\s*<\\s*([A-Z][A-Za-z0-9_$]*)[^>]*>\\s+${escapeRegex(repositoryReceiver)}\\b`))?.[1];
+  return undefined;
 }
 
 function sameEntity(left: string, right: string): boolean {
-  const normalize = (value: string) => value.replace(/(?:Entity|Model)$/i, '').toLowerCase();
+  const normalize = (value: string) => value
+    .replace(/(?:Entity|Model)$/i, '')
+    .replace(/(?<!s)s$/i, '')
+    .toLowerCase();
   return normalize(left) === normalize(right);
 }
 

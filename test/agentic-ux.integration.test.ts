@@ -9,6 +9,8 @@ import { buildGraphSummary, buildVariantTrace, listFlows } from '../src/graph/tr
 import { analyze } from '../src/pipeline/analyze.js';
 import { successEnvelope } from '../src/ux/cli-envelope.js';
 import { buildAgentPrompt, buildProjectGuide } from '../src/ux/guide.js';
+import type { CoverageReport, FlowVariants } from '../src/ir/model.js';
+import { buildSourceRepairPlan } from '../src/ux/source-repair.js';
 
 let temporaryRoot: string;
 let store: ArtifactStore;
@@ -42,6 +44,96 @@ describe('agentic CLI experience', () => {
     expect(guide.primaryAction?.command).toContain('flows list');
     expect(guide.primaryAction?.executor).toBe('agent');
     expect(buildAgentPrompt(guide)).toContain('A predicate may be proposed only for a current rule-packet gap');
+  });
+
+  it('keeps complete variants selectable while unrelated operation coverage remains incomplete', async () => {
+    const original = await store.read<CoverageReport>('coverage');
+    const first = original.data.operationCoverage[0]!;
+    const data: CoverageReport = {
+      ...original.data,
+      operationCoverage: [{
+        ...first,
+        status: 'uncovered',
+        missingStage: 'action-operation-join',
+        witnessIds: [],
+        variantIds: [],
+      }],
+    };
+    try {
+      await store.write('coverage', store.createEnvelope({
+        artifactType: original.meta.artifactType,
+        producer: original.meta.producer,
+        sourceDigest: original.meta.sourceDigest,
+        inputDigests: original.meta.inputDigests,
+        data,
+        status: original.meta.status,
+        unresolved: original.meta.unresolved,
+      }));
+      const guide = await buildProjectGuide(store);
+      expect(guide.phase).toBe('FLOW_SELECTION_REQUIRED');
+      expect(guide.primaryAction?.command).toContain('flows list');
+      expect(guide.attention).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'OPERATION_COVERAGE_BACKLOG', blocking: false }),
+      ]));
+    } finally {
+      await store.write('coverage', original);
+    }
+  });
+
+  it('turns a current zero-variant model into a bounded source-repair task instead of a coverage loop', async () => {
+    const originalCoverage = await store.read<CoverageReport>('coverage');
+    const originalVariants = await store.read<FlowVariants>('variants');
+    const first = originalCoverage.data.operationCoverage[0]!;
+    try {
+      await store.write('variants', store.createEnvelope({
+        artifactType: originalVariants.meta.artifactType,
+        producer: originalVariants.meta.producer,
+        sourceDigest: originalVariants.meta.sourceDigest,
+        inputDigests: originalVariants.meta.inputDigests,
+        data: { variants: [] },
+        status: originalVariants.meta.status,
+        unresolved: originalVariants.meta.unresolved,
+      }));
+      await store.write('coverage', store.createEnvelope({
+        artifactType: originalCoverage.meta.artifactType,
+        producer: originalCoverage.meta.producer,
+        sourceDigest: originalCoverage.meta.sourceDigest,
+        inputDigests: {
+          ...originalCoverage.meta.inputDigests,
+          variants: (await store.read<FlowVariants>('variants')).meta.contentDigest,
+        },
+        data: {
+          ...originalCoverage.data,
+          operationCoverage: [{
+            ...first,
+            status: 'uncovered',
+            missingStage: 'entry-success-witness',
+            witnessIds: [],
+            variantIds: [],
+          }],
+        },
+        status: originalCoverage.meta.status,
+        unresolved: originalCoverage.meta.unresolved,
+      }));
+
+      const guide = await buildProjectGuide(store);
+      expect(guide.phase).toBe('SOURCE_REPAIR_REQUIRED');
+      expect(guide.primaryAction?.command).toContain('repair plan');
+      expect(buildAgentPrompt(guide)).toContain('Rerun discovery only after evidence');
+      const repair = await buildSourceRepairPlan(store);
+      expect(repair.status).toBe('source-repair-required');
+      expect(repair.gaps[0]).toMatchObject({
+        operationId: first.operationId,
+        missingStage: 'entry-success-witness',
+      });
+      expect(repair.gaps[0]?.evidence.length).toBeGreaterThan(0);
+      expect(repair.gaps[0]?.agentHints).toEqual(expect.arrayContaining([
+        expect.objectContaining({ origin: 'ast-grep-hint' }),
+      ]));
+    } finally {
+      await store.write('variants', originalVariants);
+      await store.write('coverage', originalCoverage);
+    }
   });
 
   it('renders reviewer attestations as human gates that the agent must not execute', async () => {

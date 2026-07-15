@@ -86,6 +86,9 @@ Each returned entry uses `flowctl.run.v1`; its schema is `schemas/v1/run-summary
 ANALYSIS_REQUIRED
         │ flowctl discover
         ▼
+SOURCE_REPAIR_REQUIRED (only when the current model has zero complete variants)
+        │ flowctl repair plan; repair cited source/adapter/config evidence
+        ▼
 FLOW_SELECTION_REQUIRED
         │ flowctl flows list
         ▼
@@ -350,7 +353,7 @@ Inspect behavior signatures and representative assignments in `flows list` and `
 
 ### No flows discovered
 
-Run `coverage` and `graph summary`. Inspect `operationCoverage`: each uncovered operation identifies the first missing stage among client join, action join, success continuation, family, entry-to-success witness and variant. Resolve unsupported extraction, missing entry routes, unjoined HTTP endpoints, opaque predicates or search bounds. Do not ask Playwright to invent a path that the source model cannot establish.
+Run `repair plan`. Each gap identifies the first missing stage among client join, action join, success continuation, family, entry-to-success witness and variant, plus a bounded source-evidence neighborhood. Use ast-grep or repository search only to investigate nearby patterns; prove any new canonical edge through the typed extractor. Do not rerun unchanged coverage or ask Playwright to invent a path.
 
 ### Repeated-row control is missing
 

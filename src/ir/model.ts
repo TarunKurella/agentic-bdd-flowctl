@@ -310,7 +310,7 @@ export interface InputConstraint {
 export interface TerminalEffectFact {
   id: string;
   entity: string;
-  kind: 'entity-created' | 'state-changed' | 'entity-deleted' | 'external-command' | 'unknown-mutation';
+  kind: 'entity-created' | 'state-changed' | 'entity-deleted' | 'external-command' | 'authentication-session-issued' | 'unknown-mutation';
   toState?: string;
   sourceRef: SourceRef;
 }

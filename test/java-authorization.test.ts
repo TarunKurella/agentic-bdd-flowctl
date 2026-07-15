@@ -90,6 +90,131 @@ describe('Spring authorization extraction', () => {
     });
   });
 
+  it('applies an exact Spring SecurityFilterChain fallback to unannotated endpoints', () => {
+    const java = extractJava([
+      javaAt('backend/SecurityConfig.java', `
+        @Configuration
+        public class SecurityConfig {
+          @Bean
+          SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+            http.authorizeHttpRequests(requests -> requests
+              .requestMatchers("/api/private/**").authenticated()
+              .anyRequest().permitAll());
+            return http.build();
+          }
+        }
+      `),
+      javaFile(`
+        @RestController
+        public class ApplicationController {
+          @PostMapping("/api/login")
+          public Object login(Object request) { repository.save(request); return request; }
+          @PostMapping("/api/private/applications")
+          public Object submit(Object request) { repository.save(request); return request; }
+        }
+      `),
+    ]);
+
+    expect(java.endpoints.find((endpoint) => endpoint.handler === 'login')?.authorization.status).toBe('anonymous');
+    expect(java.endpoints.find((endpoint) => endpoint.handler === 'submit')?.authorization.status).toBe('authenticated');
+  });
+
+  it('recognizes a successful JWT response as an authentication-session terminal effect', () => {
+    const java = extractJava([javaFile(`
+      @RestController
+      public class AuthController {
+        @PermitAll
+        @PostMapping("/api/auth/login")
+        public ResponseEntity<JwtResponse> login(@RequestBody JwtRequest request) {
+          String token = jwtHelper.generateToken(userDetails);
+          JwtResponse response = JwtResponse.builder().token(token).build();
+          return new ResponseEntity<>(response, HttpStatus.OK);
+        }
+      }
+    `)]);
+
+    expect(java.effects).toEqual([
+      expect.objectContaining({ kind: 'authentication-session-issued' }),
+    ]);
+  });
+
+  it('follows a unique controller-to-interface-to-service implementation call to a persistence effect', () => {
+    const java = extractJava([
+      javaAt('backend/OrderController.java', `
+        @RestController
+        @RequestMapping("/api/orders")
+        public class OrderController {
+          private final OrderService orderService;
+          @PermitAll
+          @PostMapping
+          public ResponseEntity<Integer> create(@RequestBody OrderDto request) {
+            Integer id = orderService.createOrder(request);
+            return ResponseEntity.ok(id);
+          }
+        }
+      `),
+      javaAt('backend/OrderService.java', `
+        public interface OrderService { Integer createOrder(OrderDto request); }
+      `),
+      javaAt('backend/OrderServiceImpl.java', `
+        public class OrderServiceImpl implements OrderService {
+          private final OrderRepository orderRepository;
+          public Integer createOrder(OrderDto request) {
+            Order order = new Order();
+            Order saved = orderRepository.save(order);
+            return saved.getId();
+          }
+        }
+      `),
+    ]);
+
+    expect(java.effects).toEqual([
+      expect.objectContaining({
+        kind: 'entity-created',
+        sourceRef: expect.objectContaining({ file: 'backend/OrderServiceImpl.java' }),
+      }),
+    ]);
+    expect(java.diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'TERMINAL_EFFECT_UNRESOLVED' }),
+    ]));
+  });
+
+  it('follows a void service call, normalizes a plural route entity and recognizes repository deleteById', () => {
+    const java = extractJava([
+      javaAt('backend/OrdersController.java', `
+        @RestController
+        @RequestMapping("/api/orders")
+        public class OrdersController {
+          private final OrderService orderService;
+          @PermitAll
+          @DeleteMapping("/{orderId}")
+          public void delete(@PathVariable Integer orderId) {
+            orderService.deleteOrder(orderId);
+          }
+        }
+      `),
+      javaAt('backend/OrderService.java', `
+        public interface OrderService { void deleteOrder(Integer orderId); }
+      `),
+      javaAt('backend/OrderServiceImpl.java', `
+        public class OrderServiceImpl implements OrderService {
+          private final OrderRepository orderRepository;
+          public void deleteOrder(Integer orderId) {
+            orderRepository.deleteById(orderId);
+          }
+        }
+      `),
+    ]);
+
+    expect(java.effects).toEqual([
+      expect.objectContaining({
+        kind: 'entity-deleted',
+        entity: 'Orders',
+        sourceRef: expect.objectContaining({ file: 'backend/OrderServiceImpl.java' }),
+      }),
+    ]);
+  });
+
   it('accepts an explicit PermitAll endpoint as anonymous', () => {
     const java = extractJava([javaFile(`
       @RestController

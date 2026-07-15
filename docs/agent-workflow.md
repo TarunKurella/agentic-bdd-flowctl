@@ -26,7 +26,7 @@ After flow discovery, select one variant and environment:
 flowctl agent guide --variant <variant-id> --env <environment> --json
 ```
 
-The assistant performs the first applicable action, then reruns the same command. It does not carry a hard-coded stage sequence in its prompt.
+The assistant performs the first applicable action, then reruns the same command. A source-repair action is different: `repair plan` is an evidence packet, so the assistant must inspect and repair the cited source pattern before rediscovery. Repeating unchanged coverage is not progress.
 
 ## Generated prompt handoff
 
@@ -54,6 +54,11 @@ This keeps prompt text synchronized with source freshness, generated artifacts a
 ```text
 ANALYSIS_REQUIRED
   flowctl discover
+
+SOURCE_REPAIR_REQUIRED
+  flowctl repair plan
+  inspect only cited source spans
+  change extractor support or reviewed configuration before rediscovery
 
 FLOW_SELECTION_REQUIRED
   flowctl flows list

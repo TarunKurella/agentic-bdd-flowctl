@@ -104,7 +104,8 @@ describe('account-opening golden fixture', () => {
     expect(jointPageText).not.toMatch(/violates constraint ID .* with /);
     const steps = generated.find((file) => file.endsWith('flowctl.steps.generated.ts'))!;
     const stepText = await fs.readFile(steps, 'utf8');
-    expect(stepText).toContain('registerFlowctlSteps');
+    expect(stepText).toContain('bindFlowRuntime');
+    expect(stepText).toContain("createBdd(test)");
     expect(stepText).toContain('ensurePageDisplayed');
     const planFile = generated.find((file) => file.endsWith('step-plan.json'))!;
     const plan = JSON.parse(await fs.readFile(planFile, 'utf8')) as { steps: Array<{ witnessId: string; nodePath: string[] }> };

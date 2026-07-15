@@ -83,6 +83,8 @@ node --import tsx src/cli.ts agent guide --config flowctl.config.yaml --json
 
 `doctor` and `guide` do not leave you with generic advice. Their JSON includes exact configuration keys, concrete paths and safe commands for each blocker. `guide.paths` points directly to coverage, generated BDD, unresolved data requirements, application data and run history; a selected variant also exposes its exact requirement file.
 
+If the current model produces no complete journey, the guide enters `SOURCE_REPAIR_REQUIRED` instead of asking the assistant to rerun unchanged analysis. `flowctl repair plan` returns each operation's first missing join, a bounded evidence neighborhood, cited source spans and related diagnostics. Repository search or ast-grep may help investigate that packet, but only typed source adapters create canonical graph edges.
+
 Long analysis can stream progress without corrupting the final JSON response:
 
 ```bash
@@ -170,9 +172,9 @@ For each successful backend mutation, the pipeline:
 9. Records each surviving route as a path witness.
 10. Groups witnesses by business operation and behavior signature.
 
-The Java adapter can turn a bounded top-level `if (condition) throw ...` guard into the corresponding successful predicate. Complex control flow, named eligibility/rule calls, reflection and unsupported expressions remain conditional and require review; they are not silently treated as valid business logic.
+The Java adapter can turn a bounded top-level `if (condition) throw ...` guard into the corresponding successful predicate. It also resolves a unique bounded controller → injected service/interface → implementation call chain to supported repository persistence/deletion effects and applies a deterministic Spring Security matcher subset. Ambiguous implementations, overloads, complex control flow, named eligibility/rule calls and reflection remain conditional.
 
-The React adapter supports JSX `<Route>` declarations and nested `createBrowserRouter([...])` object routes. It also follows common source-resolved callback layers such as object API methods, Redux Toolkit async-thunk callbacks and React Hook Form `handleSubmit(callback)`, and applies one statically declared `axios.defaults.baseURL` when normalizing HTTP paths. Unsupported component composition remains explicit; a configured transparent component is never treated as though its hidden controls were extracted.
+The React adapter supports JSX `<Route>` declarations and nested `createBrowserRouter([...])` object routes. A bounded ts-morph composition pass follows source-owned rendered components, propagates render guards, expands finite mapped navigation objects and stops at interaction-bearing component boundaries. It also resolves common callback layers such as object API methods, Redux Toolkit async thunks and React Hook Form `handleSubmit(callback)`, including exact static `register` constraints. Unresolved or cyclic composition remains diagnostic; framework primitives such as Material UI wrappers are not misclassified as unknown application components.
 
 The important output is the proof chain, not only the variant name:
 
@@ -203,16 +205,16 @@ A behavior signature includes the actor contract, ordered pages/actions, active 
 
 This is controlled equivalence-class generation, not Cartesian permutation.
 
-Completeness is checked per in-scope backend operation. `coverage.json.operationCoverage` marks each operation `covered`, `conditional` or `uncovered` and identifies the first missing stage: frontend-client join, action-operation join, success continuation, family, entry-to-success witness or behavior variant. Any uncovered in-scope operation keeps the guide in `ANALYSIS_REQUIRED`; a few discovered flows are not presented as complete application coverage.
+Completeness is checked per in-scope backend operation. `coverage.json.operationCoverage` marks each operation `covered`, `conditional` or `uncovered` and identifies the first missing stage: frontend-client join, action-operation join, success continuation, family, entry-to-success witness or behavior variant. Complete variants remain selectable while unrelated gaps are an explicit coverage backlog. A current zero-variant model enters `SOURCE_REPAIR_REQUIRED` and emits a bounded repair plan instead of looping on coverage.
 
 ### Current source support
 
 | Area | Supported examples | Conservative boundary |
 | --- | --- | --- |
 | React routing | JSX `<Route>` and nested `createBrowserRouter` object trees | Computed route tables remain unresolved |
-| UI actions/forms | Native/MUI-style controls, direct handlers, `handleSubmit(callback)` | Unknown event factories and uninlined custom components remain conditional |
+| UI actions/forms | Native/MUI-style controls, source-owned component composition, direct handlers, `handleSubmit(callback)`, static React Hook Form rules | Dynamic component selection, unknown event factories and unresolved application components remain conditional |
 | Frontend calls | Fetch/Axios, one static global Axios base URL, source-resolved object methods and async-thunk callbacks | Dynamic client configuration or ambiguous dispatch stays unresolved |
-| Spring operations | Request mappings, Bean Validation, supported method security and terminal effects | Global/dynamic security and delegated domain rules create a rule packet or remain review-only |
+| Spring operations | Request mappings, Bean Validation, supported method/global security, bounded service implementation calls and terminal effects | Ambiguous dispatch, dynamic security and delegated domain rules create a rule packet or remain review-only |
 | Graphify | Imported provenance plus agent-side scoped architecture queries | Graphify edges never create executable Flowctl joins by themselves |
 
 `coverage` reports the first failed join for every in-scope operation. This makes an unfamiliar repository useful even when it yields zero variants: the CLI distinguishes an absent HTTP match from an unresolved action chain, missing navigation, conditional rule or traversal bound instead of emitting partial BDD as complete coverage.
@@ -385,7 +387,7 @@ Generated output contains:
   steps/flowctl.steps.generated.ts
 ```
 
-Runnable journey features contain only `satisfiable` variants and carry `@source-derived @journey @implementation-required`. Page-contract specifications and conditional journeys are review artifacts named `.feature.txt`, tagged `@review-only`, and deliberately kept outside Playwright-BDD feature discovery. Generated wording and step plans are not a claim that a corporate Playwright adapter already exists. The generated step definitions delegate to a `FlowRuntime` interface so one adapter can be reused across runnable features. `bdd-traceability.json` maps generated and review statements back to the selected witness, behavior path and evidence IDs.
+Runnable journey features contain only `satisfiable` variants and carry `@source-derived @journey @implementation-required`. Page-contract specifications and conditional journeys are review artifacts named `.feature.txt`, tagged `@review-only`, and deliberately kept outside Playwright-BDD feature discovery. The generated step file registers direct top-level `Given`/`When`/`Then` definitions through Playwright-BDD's `createBdd(test)` and exposes `bindFlowRuntime(runtime)`; the application bootstrap binds one reviewed Playwright implementation. A real `bddgen --verbose` compatibility test must discover nonzero generated steps and compile the feature—TypeScript compilation alone is not accepted as proof. `bdd-traceability.json` maps every statement back to its witness, behavior path and evidence IDs.
 
 Within a runnable journey, every active editable field on an interaction screen through the final action has a stable requirement/field/page ID step. Each merged source constraint for that requirement is emitted separately with its constraint ID, kind, domain and source value when present. Secret-bearing requirements suppress representative values and the constraint value, validation message and source excerpt; their constraint shape, source location and evidence references remain traceable. The terminal success-screen occurrence is probe-only and creates no fill/data obligation. Read-only fields are not turned into fill steps, and conditionally writable fields keep the variant out of runtime execution until reviewed.
 
@@ -466,6 +468,7 @@ flowctl data confirm --requirement <id> --reviewer <corporate-id>
 flowctl data verify --flow <variant>
 
 flowctl bdd generate [--flow <family>]
+flowctl repair plan
 flowctl ground adapters plan --variant <variant>
 flowctl ground adapters verify --variant <variant>
 flowctl ground runner plan
@@ -580,7 +583,7 @@ See [SECURITY.md](SECURITY.md) for repository guidance.
 - Version `0.2` targets React/TypeScript and Spring-style Java.
 - Static extractors are intentionally conservative.
 - Server-driven UI, reflection, unsupported validators and opaque predicates remain unresolved rather than guessed.
-- The Java adapter constructs success predicates only for supported simple top-level throw guards; complex backend rules remain review-only.
+- The Java adapter constructs success predicates only for supported simple top-level throw guards and follows only unique bounded injected-service calls; complex or ambiguous backend rules remain review-only.
 - `analysis.transparentComponents` is a reviewed allowlist for non-interactive wrappers, not a way to hide unknown custom controls.
 - Dynamic repeated-row action templates are not implemented in v0.2; such controls require extractor/runtime support rather than guessed parameterized locators.
 - Entity-state prerequisites become executable data obligations only when the predicate maps to one unique active selector field; ambiguous or relational prerequisites remain conditional.

@@ -256,7 +256,9 @@ export function buildOperationCatalog(bundle: ExtractionBundle, config?: Flowctl
       endpoint.validationIds.includes(validation.id) && validation.kind === 'opaque'
     ));
     const hasAmbiguousMapping = (endpointRouteCounts.get(`${endpoint.method.toUpperCase()}:${normalizeTemplate(endpoint.pathTemplate)}`) ?? 0) > 1;
-    const machineName = commandName(endpoint.handler, effect?.entity ?? endpoint.controller.replace(/Controller$/, ''));
+    const machineName = effect?.kind === 'authentication-session-issued'
+      ? 'authentication.login'
+      : commandName(endpoint.handler, effect?.entity ?? endpoint.controller.replace(/Controller$/, ''));
     const wiki = bundle.wikiConcepts.find((concept) => [concept.canonicalLabel, ...concept.aliases].some((alias) => slug(alias) === slug(effect?.entity ?? '')));
     const label = humanizeCommand(machineName, wiki?.canonicalLabel);
     operations.push({
@@ -370,13 +372,10 @@ export function buildPageContracts(bundle: ExtractionBundle, catalog: OperationC
     const actions = bundle.actions.filter((action) => action.pageId === page.id);
     const completeness = page.completeness ?? 'exact';
     const unresolvedChildComponentRefs = page.unresolvedChildComponentRefs ?? [];
-    const entryConditions: Predicate[] = completeness === 'conditional'
-      ? [{
-          kind: 'opaque',
-          sourceExpression: `page-composition:${page.id}`,
-          reason: 'One or more rendered child components were not inlined, so their fields, guards and actions are not proved complete.',
-        }]
-      : [];
+    // Incomplete composition means the action inventory may be missing alternatives;
+    // it does not invalidate a separately source-proved action that was extracted.
+    // Guards on that action/component remain attached to the action itself.
+    const entryConditions: Predicate[] = [];
     return {
       id: page.id,
       name: page.name,
@@ -697,6 +696,7 @@ export function buildFlowFamilies(catalog: OperationCatalog, actors: ActorRequir
 export function searchPaths(graph: BehaviorGraph, families: FlowFamilies, config: FlowctlConfig): PathWitnesses {
   const witnesses: PathWitness[] = [];
   const outgoing = new Map<string, BehaviorEdge[]>();
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
   const edgeById = new Map(graph.edges.map((edge) => [edge.id, edge]));
   type MutableTruncation = PathSearchTruncationDetail & { sampleKey: string };
   const truncations = new Map<string, MutableTruncation>();
@@ -815,6 +815,13 @@ export function searchPaths(graph: BehaviorGraph, families: FlowFamilies, config
 
       for (const edge of outgoing.get(state.nodeId) ?? []) {
         if (edge.outcome === 'error' || edge.outcome === 'cancel') continue;
+        const targetNode = nodeById.get(edge.to);
+        const repeatsScreenWithoutBusinessProgress = targetNode?.kind === 'screen-state'
+          && state.nodePath.includes(edge.to)
+          && edge.outcome !== 'success'
+          && edge.effects.some((effect) => effect.kind === 'navigate')
+          && edge.effects.every((effect) => effect.kind === 'navigate');
+        if (repeatsScreenWithoutBusinessProgress) continue;
         const visits = new Map(state.visits);
         const count = (visits.get(edge.to) ?? 0) + 1;
         if (count > config.analysis.maxStateVisits) {
@@ -1219,9 +1226,11 @@ function classifyWitnessAssignments(
     graph.edges.find((edge) => edge.id === edgeId)?.requestPayloadContracts
       ?.flatMap((contract) => Object.keys(contract.literalBindings ?? {})) ?? []
   )));
-  const requiredActorAvailable = actorRequirementIds.some((actorId) => (
-    actors?.actors.find((actor) => actor.id === actorId)?.authentication === 'required'
-  ));
+  const pathActors = actorRequirementIds.flatMap((actorId) => {
+    const actor = actors?.actors.find((candidate) => candidate.id === actorId);
+    return actor ? [actor] : [];
+  });
+  const requiredActorAvailable = pathActors.some((actor) => actor.authentication === 'required');
   const actorAttributeAssignments: Record<string, string | number | boolean | null> = {};
   const entityPrerequisites: NonNullable<FlowVariant['entityPrerequisites']> = [];
   const unboundPathAssignments: string[] = [];
@@ -1230,7 +1239,12 @@ function classifyWitnessAssignments(
     const controlledByField = exactFieldPaths.has(assignmentPath)
       || (leafCounts.get(leaf) === 1 && fieldPaths.some((fieldPath) => fieldPath.split('.').at(-1) === leaf));
     const establishedBySourceLiteral = sourceLiteralAssignments.has(assignmentPath);
-    if (controlledByField || establishedBySourceLiteral) continue;
+    const establishedByActorAuthentication = isActorPresencePath(assignmentPath) && pathActors.some((actor) => (
+      actor.authentication === 'anonymous'
+        ? value === false || value === null
+        : value === true
+    ));
+    if (controlledByField || establishedBySourceLiteral || establishedByActorAuthentication) continue;
     if (requiredActorAvailable && isActorAttributePath(assignmentPath)) {
       actorAttributeAssignments[assignmentPath] = value;
     } else {
@@ -1255,6 +1269,10 @@ function classifyWitnessAssignments(
 
 function isActorAttributePath(value: string): boolean {
   return /^(?:user|actor|principal|currentUser|session)(?:\.|$)/i.test(value);
+}
+
+function isActorPresencePath(value: string): boolean {
+  return /^(?:user|actor|principal|currentUser|session)(?:\.authenticated)?$/i.test(value);
 }
 
 function entityFieldForPredicatePath(pathValue: string, fields: ReactFieldFact[]): ReactFieldFact | undefined {

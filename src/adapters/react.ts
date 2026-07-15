@@ -96,6 +96,19 @@ export function extractReact(
   }
 
   const axiosBasePath = extractAxiosDefaultBasePath([...sourceMap.values()]);
+  const handlersByFile = new Map<string, ReactHandlerFact[]>();
+  for (const [relativePath, source] of sourceMap) {
+    const calls = source.getDescendantsOfKind(SyntaxKind.CallExpression);
+    const fileHttp = calls.flatMap((call) => {
+      const fact = extractHttpCall(call, relativePath, axiosBasePath);
+      return fact ? [fact] : [];
+    });
+    const fileNavigations = calls.flatMap((call) => {
+      const fact = extractNavigation(call, relativePath);
+      return fact ? [fact] : [];
+    });
+    handlersByFile.set(relativePath, extractHandlers(source, relativePath, fileHttp, fileNavigations));
+  }
 
   for (const [relativePath, source] of sourceMap) {
     const discovery = discoverPages(source, relativePath, routes);
@@ -121,7 +134,7 @@ export function extractReact(
       if (permission) permissions.push(permission);
     }
 
-    const fileHandlers = extractHandlers(source, relativePath, fileHttp, fileNavigations);
+    const fileHandlers = handlersByFile.get(relativePath) ?? [];
     handlers.push(...fileHandlers);
 
     for (const pageScope of pageScopes) {
@@ -163,20 +176,40 @@ export function extractReact(
           scope: pageScope.page.id,
         });
       }
-      for (const jsx of renderedJsxNodes) {
+      const composition = collectComposedRenderTree(pageScope.node, relativePath, sourceMap);
+      if (composition.unresolved.length) {
+        pageScope.page.completeness = 'conditional';
+        for (const unresolved of composition.unresolved) {
+          pageScope.page.unresolvedChildComponentRefs = dedupeSourceRefs([
+            ...(pageScope.page.unresolvedChildComponentRefs ?? []),
+            unresolved.sourceRef,
+          ]);
+          diagnostics.push({
+            code: 'REACT_COMPONENT_COMPOSITION_UNRESOLVED',
+            severity: 'blocked',
+            message: unresolved.reason,
+            evidenceRefs: [pageScope.page.id],
+            scope: pageScope.page.id,
+          });
+        }
+      }
+      for (const context of composition.nodes) {
+        const jsx = context.jsx;
+        const contextPath = context.relativePath;
         const opening = Node.isJsxElement(jsx) ? jsx.getOpeningElement() : jsx;
         const tag = opening.getTagNameNode().getText();
-        const declarative = extractDeclarativeNavigations(opening, tag, relativePath, pageScope.page.id);
+        const declarative = extractDeclarativeNavigations(opening, tag, contextPath, pageScope.page.id, context.renderGuard);
         navigations.push(...declarative.navigations);
         diagnostics.push(...declarative.diagnostics);
         const action = extractAction(
           jsx,
           opening,
           tag,
-          relativePath,
+          contextPath,
           pageScope.page.id,
-          fileHandlers,
+          handlersByFile.get(contextPath) ?? [],
           declarative.navigations.map((navigation) => navigation.id),
+          context.renderGuard,
         );
         if (action) {
           actions.push(action);
@@ -190,12 +223,12 @@ export function extractReact(
             });
           }
         }
-        const field = extractField(jsx, opening, tag, relativePath, pageScope.page.id);
+        const field = extractField(jsx, opening, tag, contextPath, pageScope.page.id, context.renderGuard);
         if (field) {
           fields.push(field);
         }
         if (!field && isUnresolvedNativeControl(tag, opening)) {
-          const ref = sourceRef(relativePath, opening, tag);
+          const ref = sourceRef(contextPath, opening, tag);
           pageScope.page.completeness = 'conditional';
           pageScope.page.unresolvedChildComponentRefs = dedupeSourceRefs([
             ...(pageScope.page.unresolvedChildComponentRefs ?? []),
@@ -209,8 +242,8 @@ export function extractReact(
             scope: pageScope.page.id,
           });
         }
-        if (isUnresolvedChildComponent(tag, action, field, declarative.navigations, options.transparentComponents ?? [])) {
-          const ref = sourceRef(relativePath, opening, tag);
+        if (isUnresolvedChildComponent(opening, tag, action, field, declarative.navigations, options.transparentComponents ?? [], sourceMap)) {
+          const ref = sourceRef(contextPath, opening, tag);
           pageScope.page.completeness = 'conditional';
           pageScope.page.unresolvedChildComponentRefs = dedupeSourceRefs([
             ...(pageScope.page.unresolvedChildComponentRefs ?? []),
@@ -280,6 +313,167 @@ interface PageScope {
   page: PageSeed;
   node: Node;
   exported: boolean;
+}
+
+interface RenderedJsxContext {
+  jsx: JsxElement | JsxSelfClosingElement;
+  relativePath: string;
+  renderGuard: Predicate;
+}
+
+interface ComponentTarget {
+  node: Node;
+  relativePath: string;
+}
+
+function collectComposedRenderTree(
+  root: Node,
+  rootPath: string,
+  sourceMap: Map<string, SourceFile>,
+): {
+  nodes: RenderedJsxContext[];
+  unresolved: Array<{ sourceRef: SourceRef; reason: string }>;
+} {
+  const nodes: RenderedJsxContext[] = [];
+  const unresolved: Array<{ sourceRef: SourceRef; reason: string }> = [];
+  const maxDepth = 12;
+  const maxNodes = 5000;
+
+  const visit = (component: Node, relativePath: string, stack: string[], depth: number, inheritedGuard: Predicate): void => {
+    const jsxNodes = [
+      ...component.getDescendantsOfKind(SyntaxKind.JsxSelfClosingElement),
+      ...component.getDescendantsOfKind(SyntaxKind.JsxElement),
+    ].filter((jsx) => jsxIsInPageRender(component, jsx));
+    for (const jsx of jsxNodes) {
+      if (nodes.length >= maxNodes) {
+        unresolved.push({
+          sourceRef: sourceRef(relativePath, jsx),
+          reason: `React component composition exceeded ${maxNodes} rendered JSX nodes while expanding ${rootPath}.`,
+        });
+        return;
+      }
+      nodes.push({ jsx, relativePath, renderGuard: inheritedGuard });
+      const opening = Node.isJsxElement(jsx) ? jsx.getOpeningElement() : jsx;
+      const target = resolveApplicationComponent(opening, sourceMap);
+      if (!target) continue;
+      if (componentInvocationDeclaresInteraction(opening)) continue;
+      const key = `${target.relativePath}:${target.node.getStart()}`;
+      if (stack.includes(key)) {
+        unresolved.push({
+          sourceRef: sourceRef(relativePath, opening, opening.getTagNameNode().getText()),
+          reason: `React component composition found a render cycle through ${opening.getTagNameNode().getText()}.`,
+        });
+        continue;
+      }
+      if (depth >= maxDepth) {
+        unresolved.push({
+          sourceRef: sourceRef(relativePath, opening, opening.getTagNameNode().getText()),
+          reason: `React component composition exceeded depth ${maxDepth} at ${opening.getTagNameNode().getText()}.`,
+        });
+        continue;
+      }
+      visit(
+        target.node,
+        target.relativePath,
+        [...stack, key],
+        depth + 1,
+        allPredicates([inheritedGuard, conditionalGuard(opening)]),
+      );
+    }
+  };
+
+  visit(root, rootPath, [`${rootPath}:${root.getStart()}`], 0, TRUE);
+  return {
+    nodes: dedupe(nodes, (value) => `${value.relativePath}:${value.jsx.getStart()}`),
+    unresolved: dedupe(unresolved, (value) => `${value.sourceRef.file}:${value.sourceRef.line}:${value.reason}`),
+  };
+}
+
+function componentInvocationDeclaresInteraction(
+  opening: ReturnType<JsxElement['getOpeningElement']> | JsxSelfClosingElement,
+): boolean {
+  const tag = opening.getTagNameNode().getText();
+  const fieldLike = /(Input|Select|Picker|Field|Checkbox|Radio)$/.test(tag);
+  const identifiesField = ['name', 'data-path', 'id'].some((name) => jsxAttributeValue(opening.getAttribute(name)) !== undefined)
+    || opening.getAttributes().filter(Node.isJsxSpreadAttribute).some((attribute) => (
+      Node.isCallExpression(unwrapExpression(attribute.getExpression()))
+      && /(?:^|\.)register$/.test((unwrapExpression(attribute.getExpression()) as CallExpression).getExpression().getText())
+    ));
+  const declaresEvent = opening.getAttributes().some((attribute) => (
+    Node.isJsxAttribute(attribute) && /^on(Click|Submit|Change|Select|KeyDown)$/.test(attribute.getNameNode().getText())
+  ));
+  const declaresNavigation = ['to', 'href'].some((name) => opening.getAttribute(name) !== undefined);
+  return (fieldLike && identifiesField) || declaresEvent || declaresNavigation;
+}
+
+function resolveApplicationComponent(
+  opening: ReturnType<JsxElement['getOpeningElement']> | JsxSelfClosingElement,
+  sourceMap: Map<string, SourceFile>,
+): ComponentTarget | undefined {
+  const tagNode = opening.getTagNameNode();
+  if (!Node.isIdentifier(tagNode)) return undefined;
+  const symbol = tagNode.getSymbol();
+  const targetSymbol = symbol?.getAliasedSymbol() ?? symbol;
+  for (const declaration of targetSymbol?.getDeclarations() ?? []) {
+    const node = componentFunctionNode(declaration);
+    const relativePath = declaration.getSourceFile().getFilePath().replace(/^\/+/, '');
+    if (node && sourceMap.has(relativePath)) return { node, relativePath };
+  }
+  return resolveRelativeImportedComponent(tagNode.getText(), opening.getSourceFile(), sourceMap);
+}
+
+function componentFunctionNode(declaration: Node): Node | undefined {
+  if (Node.isFunctionDeclaration(declaration)) return declaration;
+  if (Node.isVariableDeclaration(declaration)) {
+    const initializer = declaration.getInitializer();
+    return initializer && (Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer))
+      ? initializer
+      : undefined;
+  }
+  return undefined;
+}
+
+function resolveRelativeImportedComponent(
+  localName: string,
+  owner: SourceFile,
+  sourceMap: Map<string, SourceFile>,
+): ComponentTarget | undefined {
+  const declaration = owner.getImportDeclarations().find((candidate) => {
+    if (!candidate.getModuleSpecifierValue().startsWith('.')) return false;
+    if (candidate.getDefaultImport()?.getText() === localName) return true;
+    return candidate.getNamedImports().some((named) => named.getAliasNode()?.getText() === localName || named.getName() === localName);
+  });
+  if (!declaration) return undefined;
+  const ownerPath = owner.getFilePath().replace(/^\/+/, '');
+  const base = path.posix.normalize(path.posix.join(path.posix.dirname(ownerPath), declaration.getModuleSpecifierValue()));
+  const targetSource = [base, `${base}.tsx`, `${base}.ts`, `${base}/index.tsx`, `${base}/index.ts`]
+    .map((candidate) => sourceMap.get(candidate))
+    .find((candidate) => candidate !== undefined);
+  if (!targetSource) return undefined;
+  const namedImport = declaration.getNamedImports().find((named) => (
+    named.getAliasNode()?.getText() === localName || named.getName() === localName
+  ));
+  const exportedName = namedImport?.getName();
+  const functions = [
+    ...targetSource.getFunctions(),
+    ...targetSource.getVariableDeclarations().flatMap((variable) => {
+      const initializer = variable.getInitializer();
+      return initializer && (Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer)) ? [variable] : [];
+    }),
+  ];
+  const candidate = exportedName
+    ? functions.find((node) => (Node.isFunctionDeclaration(node) ? node.getName() : node.getName()) === exportedName)
+    : functions.find((node) => (
+        Node.isFunctionDeclaration(node)
+          ? node.isDefaultExport()
+          : Boolean(node.getVariableStatement()?.isDefaultExport())
+      )) ?? functions.find((node) => (
+        Node.isFunctionDeclaration(node)
+          ? node.getName() === localName
+          : node.getName() === localName
+      ));
+  const node = candidate ? componentFunctionNode(candidate) : undefined;
+  return node ? { node, relativePath: targetSource.getFilePath().replace(/^\/+/, '') } : undefined;
 }
 
 function extractObjectRouterRoutes(source: SourceFile, relativePath: string): ReactRouteFact[] {
@@ -791,8 +985,10 @@ function extractDeclarativeNavigations(
   tag: string,
   relativePath: string,
   pageId: string,
+  renderGuard: Predicate = TRUE,
 ): { navigations: NavigationFact[]; diagnostics: Diagnostic[] } {
-  const baseTag = tag.split('.').at(-1);
+  const componentOverride = jsxAttributeNodeExpression(opening.getAttribute('component'))?.getText().split('.').at(-1);
+  const baseTag = componentOverride ?? tag.split('.').at(-1);
   const attributeName = baseTag === 'a' ? 'href' : ['Link', 'NavLink', 'Navigate'].includes(baseTag ?? '') ? 'to' : undefined;
   if (!attributeName) return { navigations: [], diagnostics: [] };
   const attribute = opening.getAttribute(attributeName);
@@ -807,6 +1003,7 @@ function extractDeclarativeNavigations(
         targetExpression: `<${tag}> without ${attributeName}`,
         trigger: 'declarative',
         guard: allPredicates([
+          renderGuard,
           conditionalGuard(opening),
           opaquePredicate(`<${tag}>`, `Declarative navigation has no ${attributeName} target.`),
         ]),
@@ -834,6 +1031,7 @@ function extractDeclarativeNavigations(
       targetExpression: alternative.expression,
       trigger: 'declarative',
       guard: allPredicates([
+        renderGuard,
         conditionalGuard(opening),
         alternative.guard,
         ...(alternative.status === 'conditional'
@@ -912,12 +1110,55 @@ function navigationExpressionAlternatives(expression: Node): NavigationTargetAlt
       ...(!absolute ? { reason: `Relative navigation target ${target || '<empty>'} requires the active route context.` } : {}),
     }];
   }
+  const mappedTargets = staticMappedPropertyValues(unwrapped);
+  if (mappedTargets.length) {
+    return mappedTargets.map((value) => {
+      const absolute = isContextIndependentNavigationTarget(value);
+      return {
+        target: value,
+        expression: unwrapped.getText(),
+        guard: TRUE,
+        status: absolute ? 'exact' as const : 'conditional' as const,
+        ...(!absolute ? { reason: `Relative navigation target ${value || '<empty>'} requires the active route context.` } : {}),
+      };
+    });
+  }
   return [{
     expression: unwrapped.getText(),
     guard: TRUE,
     status: 'conditional',
     reason: `Declarative navigation target ${unwrapped.getText()} is computed at runtime.`,
   }];
+}
+
+function staticMappedPropertyValues(expression: Node): string[] {
+  if (!Node.isIdentifier(expression)) return [];
+  const callback = expression.getFirstAncestor((ancestor) => Node.isArrowFunction(ancestor) || Node.isFunctionExpression(ancestor));
+  if (!callback || (!Node.isArrowFunction(callback) && !Node.isFunctionExpression(callback))) return [];
+  const call = callback.getParentIfKind(SyntaxKind.CallExpression);
+  const callee = call?.getExpression();
+  if (!call || !callee || !Node.isPropertyAccessExpression(callee) || callee.getName() !== 'map') return [];
+  const parameter = callback.getParameters()[0];
+  if (!parameter) return [];
+  const binding = parameter.getNameNode();
+  let propertyName: string | undefined;
+  if (Node.isObjectBindingPattern(binding)) {
+    const element = binding.getElements().find((candidate) => (
+      candidate.getNameNode().getText() === expression.getText()
+    ));
+    propertyName = element?.getPropertyNameNode()?.getText() ?? element?.getNameNode().getText();
+  } else if (Node.isIdentifier(binding)) {
+    const access = expression.getFirstAncestorByKind(SyntaxKind.PropertyAccessExpression);
+    if (access?.getExpression().getText() === binding.getText()) propertyName = access.getName();
+  }
+  if (!propertyName) return [];
+  const array = resolveStaticArray(callee.getExpression());
+  if (!array) return [];
+  return array.getElements().flatMap((element) => {
+    const object = resolveObjectLiteral(element);
+    const value = object ? staticValue(propertyInitializer(object, propertyName!)) : undefined;
+    return value === undefined ? [] : [value];
+  });
 }
 
 function staticNavigationValue(node: Node): string | undefined {
@@ -1054,6 +1295,7 @@ function extractAction(
   pageId: string,
   handlers: ReactHandlerFact[],
   navigationIds: string[],
+  renderGuard: Predicate = TRUE,
 ): ReactActionFact | undefined {
   const lowerTag = tag.toLowerCase();
   const baseTag = tag.split('.').at(-1) ?? tag;
@@ -1114,7 +1356,7 @@ function extractAction(
     ...(handlerResolution ? { handlerResolution } : {}),
     ...(handlerText ? { handlerExpression: handlerText } : {}),
     ...(navigationIds.length ? { navigationIds } : {}),
-    visibleWhen: visibilityPredicates(opening),
+    visibleWhen: [allPredicates([renderGuard, ...visibilityPredicates(opening)])],
     enabledWhen: [allPredicates([
       ...(disabled ? [{ kind: 'not' as const, operand: disabled }] : []),
       ...(submitClickGuard ? [submitClickGuard] : []),
@@ -1145,17 +1387,36 @@ function isSubmitControl(
 }
 
 function isUnresolvedChildComponent(
+  opening: ReturnType<JsxElement['getOpeningElement']> | JsxSelfClosingElement,
   tag: string,
   action: ReactActionFact | undefined,
   field: ReactFieldFact | undefined,
   declarativeNavigations: NavigationFact[],
   transparentComponents: string[],
+  sourceMap: Map<string, SourceFile>,
 ): boolean {
   if (!/^[A-Z]/.test(tag) && !tag.includes('.')) return false;
   const baseTag = tag.split('.').at(-1) ?? tag;
   if (['Fragment', 'Suspense', 'Route', 'Routes', 'Outlet', 'Link', 'NavLink', 'Navigate'].includes(baseTag)) return false;
   if (transparentComponents.includes(tag) || transparentComponents.includes(baseTag)) return false;
+  if (resolveApplicationComponent(opening, sourceMap)) return false;
+  const importedFrom = importedModuleForJsxTag(opening, tag);
+  if (importedFrom?.startsWith('@mui/')) return false;
   return !action && !field && declarativeNavigations.length === 0;
+}
+
+function importedModuleForJsxTag(
+  opening: ReturnType<JsxElement['getOpeningElement']> | JsxSelfClosingElement,
+  tag: string,
+): string | undefined {
+  const rootName = tag.split('.')[0];
+  return opening.getSourceFile().getImportDeclarations().find((declaration) => (
+    declaration.getDefaultImport()?.getText() === rootName
+    || declaration.getNamespaceImport()?.getText() === rootName
+    || declaration.getNamedImports().some((named) => (
+      named.getAliasNode()?.getText() === rootName || named.getName() === rootName
+    ))
+  ))?.getModuleSpecifierValue();
 }
 
 function isUnresolvedNativeControl(
@@ -1184,6 +1445,7 @@ function extractField(
   tag: string,
   relativePath: string,
   pageId: string,
+  renderGuard: Predicate = TRUE,
 ): ReactFieldFact | undefined {
   const lower = tag.toLowerCase();
   const fieldLike = ['input', 'select', 'textarea'].includes(tag) || /(Input|Select|Picker|Field|Checkbox|Radio)$/.test(tag);
@@ -1241,7 +1503,7 @@ function extractField(
     inputMode,
     ...(optionSource ? { optionSource } : {}),
     ...(valueBinding ? { valueBinding } : {}),
-    visibleWhen: visibilityPredicates(opening),
+    visibleWhen: [allPredicates([renderGuard, ...visibilityPredicates(opening)])],
     requiredWhen,
     constraints,
     sourceRef: sourceRef(relativePath, opening, dataPath),
@@ -1649,6 +1911,11 @@ function extractFieldConstraints(
     ));
   }
   for (const attribute of opening.getAttributes().filter(Node.isJsxSpreadAttribute)) {
+    const registered = extractRegisteredFieldConstraints(attribute, dataPath, relativePath);
+    if (registered) {
+      constraints.push(...registered);
+      continue;
+    }
     constraints.push(opaqueFieldConstraint(
       relativePath,
       attribute,
@@ -1658,6 +1925,75 @@ function extractFieldConstraints(
     ));
   }
   return dedupeConstraints(constraints);
+}
+
+function extractRegisteredFieldConstraints(
+  attribute: import('ts-morph').JsxSpreadAttribute,
+  dataPath: string,
+  relativePath: string,
+): ReactFieldFact['constraints'] | undefined {
+  const expression = unwrapExpression(attribute.getExpression());
+  if (!Node.isCallExpression(expression)) return undefined;
+  const callee = expression.getExpression().getText();
+  if (callee !== 'register' && !callee.endsWith('.register')) return undefined;
+  const registeredPath = staticValue(expression.getArguments()[0]);
+  if (registeredPath !== dataPath) return undefined;
+  const optionsNode = expression.getArguments()[1];
+  if (!optionsNode) return [];
+  const options = resolveObjectLiteral(optionsNode);
+  if (!options) {
+    return [opaqueFieldConstraint(
+      relativePath,
+      attribute,
+      dataPath,
+      'register-options',
+      `React Hook Form options ${optionsNode.getText()} are not a static object literal.`,
+    )];
+  }
+  const constraints: ReactFieldFact['constraints'] = [];
+  for (const property of options.getProperties()) {
+    const name = staticPropertyName(property);
+    const initializer = Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
+    if (!name || !initializer) {
+      constraints.push(opaqueFieldConstraint(relativePath, property, dataPath, 'register-option', 'A React Hook Form validation option is computed.'));
+      continue;
+    }
+    const unwrapped = unwrapExpression(initializer);
+    const optionObject = resolveObjectLiteral(unwrapped);
+    const optionValue = optionObject ? propertyInitializer(optionObject, 'value') : unwrapped;
+    const scalar = optionValue ? staticScalar(unwrapExpression(optionValue)) : undefined;
+    const source = sourceRef(relativePath, property, dataPath);
+    if (name === 'required' && scalar !== false) {
+      constraints.push({
+        id: stableId('constraint', `${relativePath}:${dataPath}:register:required`),
+        fieldPath: dataPath,
+        kind: 'required',
+        value: true,
+        sourceRef: source,
+      });
+      continue;
+    }
+    const numeric = name === 'minLength' || name === 'maxLength' || name === 'min' || name === 'max';
+    if (numeric && typeof scalar === 'number') {
+      constraints.push({
+        id: stableId('constraint', `${relativePath}:${dataPath}:register:${name}:${scalar}`),
+        fieldPath: dataPath,
+        kind: name === 'minLength' || name === 'min' ? 'min' : 'max',
+        domain: name === 'minLength' || name === 'maxLength' ? 'length' : 'numeric',
+        value: scalar,
+        sourceRef: source,
+      });
+      continue;
+    }
+    constraints.push(opaqueFieldConstraint(
+      relativePath,
+      property,
+      dataPath,
+      `register-${name}`,
+      `React Hook Form validation option ${name} is not in the supported static subset.`,
+    ));
+  }
+  return constraints;
 }
 
 function opaqueFieldConstraint(

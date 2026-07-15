@@ -287,6 +287,6 @@ unresolved syntax, predicates, rejected candidates, data and controls
 configured search bounds
 ```
 
-Coverage is the place to inspect when no successful variant is discovered or when the analysis is intentionally conservative.
+Coverage identifies the first missing proof stage. When no successful variant is discovered, `flowctl repair plan` projects those rows into a bounded, source-cited assistant task; the plan does not add evidence or graph edges.
 
 The report repeats the path-search report, exposes prune counts in `counts`, and emits `PATH_SEARCH_MAX_DEPTH_TRUNCATED` or `PATH_SEARCH_MAX_STATE_VISITS_TRUNCATED` diagnostics when a bound is reached. The `operationCoverage` table separately records each non-excluded operation's `covered`, `conditional` or `uncovered` status, family/witness/variant IDs, applicable `searchTruncationReasons`, and the first missing stage when uncovered: `frontend-client-join`, `action-operation-join`, `success-continuation`, `flow-family`, `entry-success-witness` or `behavior-variant`.

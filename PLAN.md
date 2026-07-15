@@ -20,6 +20,8 @@ Acceptance: identical inputs create byte-stable canonical output apart from expl
 - [x] Graphify auxiliary-evidence importer (no retrieval narrowing or join authority in v0.2)
 - [x] React extractor
 - [x] Java extractor
+- [x] Bounded ts-morph source-component composition and static mapped navigation
+- [x] Unique controller-to-injected-service implementation resolution and supported Spring Security chain rules
 - [x] Cross-layer evidence graph
 - [x] Operation candidate catalog
 
@@ -43,6 +45,7 @@ Acceptance: every modeled field, action and permission has evidence or an explic
 - [x] Successful path enumeration
 - [x] Behavior signatures
 - [x] Variant reduction
+- [x] Navigation-only detour pruning so optional screen loops do not become variants
 
 Acceptance: the fixture yields materially distinct successful variants when behavior changes, rather than a Cartesian product of values.
 
@@ -69,6 +72,7 @@ Acceptance: the tool automatically accepts only source-derived concrete represen
 - [x] Witness-ordered manifest and observation validation
 - [x] Application-specific adapter target plan/scaffold/verifier
 - [x] Approved no-shell external runner protocol and `ground run`
+- [x] Direct Playwright-BDD step registration plus real `bddgen` discovery/compilation compatibility test
 
 Acceptance: browser observations can confirm or block source-derived transitions without changing flow meaning.
 
@@ -82,6 +86,7 @@ Acceptance: browser observations can confirm or block source-derived transitions
 - [x] Stable `flowctl.cli.v1` JSON envelope
 - [x] Typed lifecycle/security exit codes
 - [x] Separate data binding and human confirmation
+- [x] Zero-variant `SOURCE_REPAIR_REQUIRED` phase with bounded source evidence and noncanonical ast-grep hints
 
 Acceptance: a developer or approved coding assistant can start with `flowctl discover`, select a variant, inspect its witness/source proof and follow exact state-derived commands through BDD, data and runtime gates without relying on conversation memory.
 
@@ -96,9 +101,10 @@ Acceptance: a developer or approved coding assistant can start with `flowctl dis
 - [ ] Approved UAT resolver integration
 - [ ] Additional React form/router conventions
 - [x] Nested `createBrowserRouter`, Axios base URL, async-thunk and `handleSubmit` conventions
+- [x] Static discovery and BDD generation proof against an external React/Java repository
 - [ ] Read-only business terminal types
 - [ ] Bug-finding contradiction passes
 
 The unchecked items require a real target application, environment or future bug-finding scope; they do not weaken the local vertical slice.
 
-Current v0.2 boundaries: Graphify is imported only as auxiliary evidence; Wiki headings/aliases enrich glossary evidence and readable labels but do not connect implementation layers; complex Java rule control flow stays review-only unless a bounded rule packet has enough independent evidence, passes validation and receives named human approval; ambiguous entity relationships and dynamic repeated-row action templates are not implemented.
+Current v0.2 boundaries: Graphify is imported only as auxiliary evidence; Wiki headings/aliases enrich glossary evidence and readable labels but do not connect implementation layers; ast-grep matches enrich source-repair packets but never create canonical edges; complex or ambiguous Java rule/dispatch control flow stays review-only unless a bounded rule packet has enough independent evidence, passes validation and receives named human approval; ambiguous entity relationships, multi-phase same-route state and dynamic repeated-row action templates are not implemented.

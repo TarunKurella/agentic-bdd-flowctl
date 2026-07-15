@@ -89,9 +89,9 @@ This boundary avoids circular confidence: a model-generated Wiki derived from th
 
 ### 3. Extract framework facts
 
-React/TypeScript adapters extract routes, pages, fields, JSX actions, visibility and enablement conditions, handler chains, navigation and HTTP calls. Java/Spring adapters extract request mappings, DTOs, Bean Validation, authorization, bounded domain guards, domain calls and success effects. A supported top-level `if (condition) throw ...` becomes `not(condition)` on the successful branch. Other control flow, named rule calls and expressions the predicate compiler cannot reduce remain opaque and make the affected operation/flow conditional.
+React/TypeScript adapters extract routes, pages, fields, JSX actions, visibility and enablement conditions, handler chains, navigation and HTTP calls. A bounded ts-morph render-composition pass follows source-owned components and propagates guards. Java/Spring adapters extract request mappings, DTOs, Bean Validation, authorization, bounded domain guards, domain calls and success effects; a unique bounded injected-interface call may resolve to its sole implementation. A supported top-level `if (condition) throw ...` becomes `not(condition)` on the successful branch. Other control flow, ambiguous dispatch, named rule calls and expressions the predicate compiler cannot reduce remain opaque.
 
-The extractors are deliberately conservative. Unsupported dynamic dispatch, reflection, server-driven UI or opaque predicates become diagnostics instead of invented edges. An unresolved custom React child component makes its page incomplete. `analysis.transparentComponents` may suppress that blocker only for a reviewed presentation/container component known to add, hide or transform no user interaction; it does not extract the child's internals.
+The extractors are deliberately conservative. Unsupported dynamic dispatch, reflection, server-driven UI or opaque predicates become diagnostics instead of invented edges. Unresolved, cyclic or bound-truncated React composition remains diagnostic. `analysis.transparentComponents` may suppress that blocker only for a reviewed presentation/container component known to add, hide or transform no user interaction; it does not extract the child's internals.
 
 ### 4. Join the layers
 
@@ -191,6 +191,8 @@ The CLI derives guidance from artifact freshness, the selected variant, one proj
 ```text
 ANALYSIS_REQUIRED
         ↓ discover/analyze
+SOURCE_REPAIR_REQUIRED (current model, zero complete variants)
+        ↓ repair plan + source/adapter/reviewed-config change
 FLOW_SELECTION_REQUIRED
         ↓ flows list + select variant
 BDD_GENERATION_REQUIRED
@@ -261,7 +263,7 @@ variants/data/witness/browser → runtime:ground → runtime-bindings.json
 all artifacts           → coverage:build → coverage.json
 ```
 
-`coverage.json.operationCoverage` reports every non-excluded backend operation as `covered`, `conditional` or `uncovered`. An uncovered row identifies the first missing stage: frontend-client join, action-operation join, success continuation, flow family, entry-to-success witness or behavior variant. The guide returns to `ANALYSIS_REQUIRED` while any in-scope operation is uncovered, preventing a partial set of happy paths from being presented as complete coverage.
+`coverage.json.operationCoverage` reports every non-excluded backend operation as `covered`, `conditional` or `uncovered`. An uncovered row identifies the first missing stage: frontend-client join, action-operation join, success continuation, flow family, entry-to-success witness or behavior variant. Existing complete variants remain usable with an explicit backlog. A current zero-variant model enters `SOURCE_REPAIR_REQUIRED`; `repair plan` gives the assistant a deterministic source neighborhood and diagnostics, while ast-grep or repository search remains noncanonical investigation evidence.
 
 ## Trust and freshness model
 

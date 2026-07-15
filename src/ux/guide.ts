@@ -33,6 +33,7 @@ import type {
 
 export type GuidePhase =
   | 'ANALYSIS_REQUIRED'
+  | 'SOURCE_REPAIR_REQUIRED'
   | 'FLOW_SELECTION_REQUIRED'
   | 'BDD_GENERATION_REQUIRED'
   | 'REVIEW_REQUIRED'
@@ -273,6 +274,14 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
     variant = availableVariants[0];
   }
 
+  if (uncoveredOperations.length && availableVariants.length) {
+    attention.push({
+      code: 'OPERATION_COVERAGE_BACKLOG',
+      message: `${uncoveredOperations.length} in-scope operation(s) remain uncovered, but ${availableVariants.length} source-supported variant(s) can continue independently. Coverage is incomplete until those operation gaps are repaired.`,
+      blocking: false,
+    });
+  }
+
   if (incomplete) {
     const state = incomplete.exists ? 'stale' : 'missing';
     actions.push({
@@ -291,7 +300,7 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
       resolution: `Run flowctl analyze --through coverage ${configArgument}`,
       paths: [store.artifactPath(incomplete.name)],
     });
-  } else if (uncoveredOperations.length) {
+  } else if (uncoveredOperations.length && !availableVariants.length) {
     const missingStages = Object.entries(uncoveredOperations.reduce<Record<string, number>>((counts, row) => {
       const stage = row.missingStage ?? 'unknown';
       counts[stage] = (counts[stage] ?? 0) + 1;
@@ -303,18 +312,18 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
       code: 'IN_SCOPE_OPERATIONS_UNCOVERED',
       message: `${uncoveredOperations.length} in-scope operation(s) have no complete source-supported entry-to-success witness (${stageSummary}).`,
       resolution: entryConfigurationRelevant
-        ? `Run flowctl coverage ${configArgument}. Verify source-derived navigation/component composition first; change entryRoutes or transparentComponents only when a human-reviewed application contract supports it.`
-        : `Run flowctl coverage ${configArgument} and repair the reported join stage before claiming complete happy-flow discovery.`,
-      ...(entryConfigurationRelevant ? { configKeys: ['analysis.entryRoutes', 'analysis.transparentComponents'] } : {}),
+        ? `Run flowctl repair plan ${configArgument}. Repair source-derived navigation/component composition first; change entryRoutes only when a human-reviewed application contract supports it.`
+        : `Run flowctl repair plan ${configArgument} and prove the missing join before claiming complete happy-flow discovery.`,
+      ...(entryConfigurationRelevant ? { configKeys: ['analysis.entryRoutes'] } : {}),
       paths: [store.artifactPath('coverage')],
     });
     actions.push({
-      id: 'inspect-operation-coverage',
-      kind: 'inspect',
+      id: 'plan-source-repair',
+      kind: 'agent',
       executor: 'agent',
-      title: 'Resolve uncovered business operations',
-      reason: `Important backend commands stop at these first missing stages: ${stageSummary}.`,
-      command: `flowctl coverage ${configArgument}`,
+      title: 'Repair the bounded source-to-flow gaps',
+      reason: `Important backend commands stop at these first missing stages: ${stageSummary}. The repair plan supplies a bounded source neighborhood for agent reasoning; it is not canonical evidence by itself.`,
+      command: `flowctl repair plan ${configArgument}`,
       blocking: true,
       priority: 20,
     });
@@ -322,17 +331,17 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
     blockers.push({
       code: 'NO_SUCCESSFUL_VARIANTS',
       message: 'No successful source-supported variant was found within the configured bounds.',
-      resolution: `Run flowctl coverage ${configArgument} and inspect unresolved diagnostics.`,
+      resolution: `Run flowctl repair plan ${configArgument} and inspect the bounded source evidence.`,
       configKeys: ['analysis.entryRoutes', 'analysis.maxPathDepth', 'analysis.maxStateVisits'],
       paths: [store.artifactPath('coverage')],
     });
     actions.push({
-      id: 'inspect-coverage',
-      kind: 'inspect',
+      id: 'plan-source-repair',
+      kind: 'agent',
       executor: 'agent',
-      title: 'Inspect discovery coverage and unresolved scope',
-      reason: 'The static model exists but contains no successful variants.',
-      command: `flowctl coverage ${configArgument}`,
+      title: 'Repair the bounded source-to-flow gaps',
+      reason: 'The static model exists but contains no successful variants. Use the repair plan to inspect exact source-backed gaps; do not rerun coverage without changing evidence, configuration or compiler support.',
+      command: `flowctl repair plan ${configArgument}`,
       blocking: true,
       priority: 20,
     });
@@ -713,7 +722,7 @@ export async function buildProjectGuide(store: ArtifactStore, options: {
   }
 
   const sortedActions = actions.sort((left, right) => left.priority - right.priority).map(({ priority: _priority, ...action }) => action);
-  const phase = determinePhase(incomplete, availableVariants, variant, selectedVariant, uncoveredOperations.length > 0);
+  const phase = determinePhase(incomplete, availableVariants, variant, selectedVariant);
   const guide: ProjectGuide = {
     schemaVersion: 1,
     project: store.config.project.name,
@@ -753,7 +762,9 @@ export function buildAgentPrompt(guide: ProjectGuide): string {
   const actionLines = (guide.phase === 'READY' ? [] : guide.nextActions).map((action, index) => {
     const instruction = action.executor === 'human'
       ? `   HUMAN GATE — stop and ask a named human to review this evidence.\n   Human command (never execute this as the agent): ${action.command}`
-      : `   Run: ${action.command}`;
+      : action.id === 'plan-source-repair'
+        ? `   Run: ${action.command}\n   Then inspect only the cited source spans and implement or propose the smallest general extractor/join repair. Rerun discovery only after evidence, reviewed configuration or compiler support changed.`
+        : `   Run: ${action.command}`;
     return `${index + 1}. ${action.title} [${action.executor}]\n   Why: ${action.reason}\n${instruction}${action.followUpCommands?.length
       ? `\n${action.followUpCommands.map((command) => `   Then: ${command}`).join('\n')}`
       : ''}`;
@@ -784,6 +795,7 @@ export function buildAgentPrompt(guide: ProjectGuide): string {
     '- Do not edit canonical `.flowctl/artifacts` or generated BDD by hand.',
     '- Do not invent transitions, actors, identifiers, existing entities, credentials or secrets. A predicate may be proposed only for a current rule-packet gap and only with its allowed evidence IDs and predicate paths.',
     '- Semantic proposals may use only packet-allowed fields and evidence IDs.',
+    '- ast-grep or repository search may enrich a source-repair packet for the assistant, but only the typed source adapters and cited source spans may create canonical graph edges.',
     '- Playwright may confirm locators and transitions; it may not rewrite business meaning.',
     '- When runtime adapters are absent, use the adapter plan target inventory and verifier; do not recurse into another agent prompt.',
     '- Ground every required actor-session, screen-state, active-field and action occurrence through its registered adapter and exact manifest/value digests.',
@@ -872,9 +884,9 @@ function determinePhase(
   variants: FlowVariant[],
   variant: FlowVariant | undefined,
   selected: ProjectGuide['selectedVariant'],
-  uncoveredOperations = false,
 ): GuidePhase {
-  if (missing || !variants.length || uncoveredOperations) return 'ANALYSIS_REQUIRED';
+  if (missing) return 'ANALYSIS_REQUIRED';
+  if (!variants.length) return 'SOURCE_REPAIR_REQUIRED';
   if (!variant || !selected) return 'FLOW_SELECTION_REQUIRED';
   if (!selected.bddGenerated) return 'BDD_GENERATION_REQUIRED';
   if (selected.feasibility === 'conditional') return 'REVIEW_REQUIRED';
@@ -888,7 +900,8 @@ function determinePhase(
 
 function phaseReason(phase: GuidePhase, selected: ProjectGuide['selectedVariant'], variantCount: number): string {
   const reasons: Record<GuidePhase, string> = {
-    ANALYSIS_REQUIRED: 'The deterministic source-to-graph pipeline is incomplete or produced no successful variant.',
+    ANALYSIS_REQUIRED: 'The deterministic source-to-graph pipeline is missing or stale and must be rebuilt.',
+    SOURCE_REPAIR_REQUIRED: 'The static model is current, but no source-proved entry-to-success witness exists. A bounded source/adapter repair is required; rerunning analysis unchanged cannot help.',
     FLOW_SELECTION_REQUIRED: `${variantCount} behaviorally distinct variant(s) exist; select one before environment-specific guidance.`,
     BDD_GENERATION_REQUIRED: `The selected symbolic witness exists, but its journey/page-contract BDD has not been materialized.`,
     REVIEW_REQUIRED: 'The selected variant contains unresolved source semantics and is inspectable, but execution is blocked.',

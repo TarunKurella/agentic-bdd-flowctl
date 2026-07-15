@@ -185,6 +185,48 @@ describe('React flow extraction', () => {
     expect(result.diagnostics.filter((diagnostic) => diagnostic.code === 'REACT_CHILD_COMPONENT_UNRESOLVED')).toHaveLength(2);
   });
 
+  it('composes source-owned layout components and unfolds finite mapped router links', () => {
+    const result = extractReact([
+      tsxAt('frontend/src/router.tsx', `
+        import { createBrowserRouter } from 'react-router-dom';
+        import App from './App';
+        import LoginPage from './LoginPage';
+        export const router = createBrowserRouter([{ path: '/', element: <App />, children: [
+          { path: 'login', element: <LoginPage /> },
+        ] }]);
+      `),
+      tsxAt('frontend/src/App.tsx', `
+        import Header from './Header';
+        import { Outlet } from 'react-router-dom';
+        export default function App() { return <main><Header /><Outlet /></main>; }
+      `),
+      tsxAt('frontend/src/Header.tsx', `
+        import { Box, List, ListItem } from '@mui/material';
+        import { NavLink } from 'react-router-dom';
+        const accountLinks = [
+          { title: 'Login', path: '/login' },
+          { title: 'Register', path: '/register' },
+        ];
+        export default function Header() { return <Box><List>{accountLinks.map(({ title, path }) => (
+          <ListItem component={NavLink} to={path} key={path}>{title}</ListItem>
+        ))}</List></Box>; }
+      `),
+      tsxAt('frontend/src/LoginPage.tsx', `export default function LoginPage() { return <h1>Login</h1>; }`),
+    ]);
+
+    const app = result.pages.find((page) => page.name === 'App');
+    expect(app).toBeDefined();
+    expect(result.navigations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fromPageId: app?.id, target: '/login', targetStatus: 'exact' }),
+      expect.objectContaining({ fromPageId: app?.id, target: '/register', targetStatus: 'exact' }),
+    ]));
+    expect(result.actions.find((action) => action.pageId === app?.id)?.navigationIds).toHaveLength(2);
+    expect(result.diagnostics.filter((diagnostic) => (
+      diagnostic.code === 'REACT_CHILD_COMPONENT_UNRESOLVED'
+      && ['Header', 'Box', 'List', 'ListItem'].some((name) => diagnostic.message.includes(name))
+    ))).toHaveLength(0);
+  });
+
   it('uses reviewed transparent containers without hiding unknown interactive children', () => {
     const result = extractReact([tsx(`
       export function CompositePage() { return <Layout><AddressForm /></Layout>; }
@@ -210,6 +252,20 @@ describe('React flow extraction', () => {
       valueBinding: { path: 'phone', writable: true },
     });
     expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'REACT_NATIVE_CONTROL_UNRESOLVED')).toBe(false);
+  });
+
+  it('compiles the supported static React Hook Form register options without an opaque spread constraint', () => {
+    const result = extractReact([tsx(`
+      export function RegistrationPage() {
+        return <input {...register('username', { required: 'Username is required', minLength: 3 })} />;
+      }
+    `)]);
+
+    expect(result.fields[0]?.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'required', value: true }),
+      expect.objectContaining({ kind: 'min', domain: 'length', value: 3 }),
+    ]));
+    expect(result.fields[0]?.constraints.some((constraint) => constraint.kind === 'opaque')).toBe(false);
   });
 
   it('marks unidentified native controls conditional, skips hidden values, and keeps uncontrolled defaults editable', () => {
