@@ -103,7 +103,7 @@ The variant trace exposes the representative witness, path condition, assignment
 
 If the proof is conditional or contains unresolved references, report that status. Do not silently promote it to verified.
 
-## File-mediated semantic reasoning
+## File-mediated semantic and rule reasoning
 
 When a bounded semantic decision is required:
 
@@ -111,7 +111,7 @@ When a bounded semantic decision is required:
 flowctl writes a packet tied to current source/config evidence
 → assistant reads only the packet and allowed evidence
 → assistant writes a schema-constrained proposal to outputPath
-→ flowctl validates schema, IDs and allowed fields
+→ flowctl validates schema, IDs, allowed fields, evidence and predicate paths
 → a human review decision is recorded
 → the pipeline resumes
 ```
@@ -134,7 +134,12 @@ Example packet shape:
 }
 ```
 
-The proposal cannot directly change a canonical artifact. Use:
+There are two packet tasks:
+
+- `name-and-group-operations` proposes readable command metadata only;
+- `resolve-operation-rules` reconciles compiler-listed authorization and successful-acceptance gaps. It cannot invent a validation, endpoint, authority source or predicate path. Every omitted gap must be explicitly unresolved.
+
+The proposal cannot directly change a canonical artifact. `packet validate` reports its deterministic downstream impact. Use:
 
 ```bash
 flowctl packet inspect <packet-id> --json
@@ -145,6 +150,7 @@ flowctl discover --json
 
 An approval belongs to the packet evidence it reviewed. If source/config evidence changes, regenerate and review the current packet rather than reusing stale meaning.
 The proposal must echo the packet's `packetDigest`; a proposal written for an older packet is rejected even when stable IDs happen to be unchanged.
+After approval, `discover` recompiles accepted rule facts through evidence, operations, actors, behavior, witnesses, variants, data requirements and BDD. It does not copy an AI-authored summary into those artifacts.
 
 ## Data loop: bind, then confirm
 

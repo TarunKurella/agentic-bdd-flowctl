@@ -140,7 +140,10 @@ export function buildEvidenceGraph(bundle: ExtractionBundle): EvidenceGraph {
     }, navigation.sourceRef));
   }
   for (const permission of bundle.permissions) {
-    nodes.push(node(permission.id, 'permission', `${permission.layer}:${permission.authority}`, permission.authority, { layer: permission.layer }, permission.sourceRef));
+    nodes.push({
+      ...node(permission.id, 'permission', `${permission.layer}:${permission.authority}`, permission.authority, { layer: permission.layer }, permission.sourceRef),
+      origin: permission.origin ?? 'source-extracted',
+    });
   }
   for (const endpoint of bundle.endpoints) {
     nodes.push(node(endpoint.id, 'java-endpoint', `${endpoint.method}:${endpoint.pathTemplate}:${endpoint.controller}.${endpoint.handler}`, `${endpoint.method} ${endpoint.pathTemplate}`, {
@@ -152,6 +155,7 @@ export function buildEvidenceGraph(bundle: ExtractionBundle): EvidenceGraph {
       responseType: endpoint.responseType,
       authorization: endpoint.authorization,
       domainGuard: endpoint.domainGuard,
+      semanticResolution: endpoint.semanticResolution,
     }, endpoint.sourceRef));
   }
   for (const validation of bundle.validations) {
@@ -342,14 +346,15 @@ export function buildActorRequirements(bundle: ExtractionBundle, catalog: Operat
     const backend = bundle.permissions.filter((permission) => endpoint.permissionIds.includes(permission.id));
     const frontend = bundle.permissions.filter((permission) => permission.layer === 'frontend' && backend.some((back) => back.authority === permission.authority));
     const authorities = [...new Set([...backend, ...frontend].map((permission) => permission.authority))].sort();
+    const authenticationRequired = endpoint.authorization.status === 'authenticated' || authorities.length > 0;
     const actor: ActorRequirement = {
-      id: stableId('actor-requirement', `${operation.id}:${authorities.join(',') || 'anonymous'}`),
-      authentication: authorities.length ? 'required' : 'anonymous',
+      id: stableId('actor-requirement', `${operation.id}:${authorities.join(',') || (authenticationRequired ? 'authenticated' : 'anonymous')}`),
+      authentication: authenticationRequired ? 'required' : 'anonymous',
       authoritiesAll: authorities,
       rolesAll: authorities.filter((authority) => authority.startsWith('ROLE_')),
       attributePredicates: [],
       relationships: [],
-      label: authorities.length ? `principal with ${authorities.join(', ')}` : 'anonymous principal',
+      label: authorities.length ? `principal with ${authorities.join(', ')}` : authenticationRequired ? 'authenticated principal' : 'anonymous principal',
       evidenceRefs: [...backend, ...frontend].map((permission) => permission.id),
     };
     actors.push(actor);

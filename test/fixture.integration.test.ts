@@ -147,6 +147,6 @@ describe('account-opening golden fixture', () => {
       unresolved: [],
     }), 'utf8');
     const proposal = await validatePacketProposal(store, packet.packetId);
-    expect(proposal.decisions[0]?.machineName).toBe('application.submit');
+    expect('decisions' in proposal && proposal.decisions[0]?.machineName).toBe('application.submit');
   });
 });

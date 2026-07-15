@@ -10,7 +10,7 @@ import { loadConfig, type FlowctlConfig } from './core/config.js';
 import { ArtifactStore } from './core/artifact-store.js';
 import { analyze, STAGES, type AnalyzeProgressEvent, type Stage } from './pipeline/analyze.js';
 import { generateBdd } from './bdd/generate.js';
-import { approvePacket, inspectPacket, validatePacketProposal } from './agent/packets.js';
+import { approvePacket, inspectPacket, proposalImpact, validatePacketProposal } from './agent/packets.js';
 import { prepareGrounding, recordGrounding, verifyGroundingManifest } from './runtime/grounding.js';
 import { planRuntimeAdapters, renderRuntimeAdapterPlan, verifyRuntimeAdapters } from './runtime/adapter-plan.js';
 import { planGroundingRunner, renderGroundingRunnerPlan, runGrounding } from './runtime/runner.js';
@@ -292,7 +292,13 @@ withConfig(packet.command('validate <packet-id>'))
   .action(async (packetId: string, options: ConfigOptions) => {
     const store = new ArtifactStore(await loadConfig(options.config));
     const proposal = await validatePacketProposal(store, packetId);
-    print({ valid: true, decisions: proposal.decisions.length, unresolved: proposal.unresolved.length }, options.json);
+    print({
+      valid: true,
+      proposalType: 'decisions' in proposal ? 'operation-semantics' : 'operation-rules',
+      items: 'decisions' in proposal ? proposal.decisions.length : proposal.resolutions.length,
+      unresolved: proposal.unresolved.length,
+      impact: proposalImpact(proposal),
+    }, options.json);
   });
 
 const review = program.command('review').description('Record explicit human review decisions.');

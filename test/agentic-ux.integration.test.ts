@@ -41,7 +41,7 @@ describe('agentic CLI experience', () => {
     expect(guide.inventory.variants).toBe(2);
     expect(guide.primaryAction?.command).toContain('flows list');
     expect(guide.primaryAction?.executor).toBe('agent');
-    expect(buildAgentPrompt(guide)).toContain('Do not invent predicates, transitions, actors, identifiers');
+    expect(buildAgentPrompt(guide)).toContain('A predicate may be proposed only for a current rule-packet gap');
   });
 
   it('renders reviewer attestations as human gates that the agent must not execute', async () => {

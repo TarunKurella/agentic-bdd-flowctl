@@ -92,7 +92,10 @@ export function extractReact(
         }
       }
     }
+    routes.push(...extractObjectRouterRoutes(source, relativePath));
   }
+
+  const axiosBasePath = extractAxiosDefaultBasePath([...sourceMap.values()]);
 
   for (const [relativePath, source] of sourceMap) {
     const discovery = discoverPages(source, relativePath, routes);
@@ -103,7 +106,7 @@ export function extractReact(
     const fileHttp: HttpOperationFact[] = [];
     const fileNavigations: NavigationFact[] = [];
     for (const call of source.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-      const http = extractHttpCall(call, relativePath);
+      const http = extractHttpCall(call, relativePath, axiosBasePath);
       if (http) {
         httpOperations.push(http);
         fileHttp.push(http);
@@ -279,6 +282,58 @@ interface PageScope {
   exported: boolean;
 }
 
+function extractObjectRouterRoutes(source: SourceFile, relativePath: string): ReactRouteFact[] {
+  const routes: ReactRouteFact[] = [];
+  const routerCalls = source.getDescendantsOfKind(SyntaxKind.CallExpression).filter((call) => (
+    call.getExpression().getText().split('.').at(-1) === 'createBrowserRouter'
+  ));
+  for (const call of routerCalls) {
+    const root = resolveArrayLiteral(call.getArguments()[0]);
+    if (!root) continue;
+    visitRouteObjects(root, '');
+  }
+  return dedupe(routes, (route) => route.id);
+
+  function visitRouteObjects(array: import('ts-morph').ArrayLiteralExpression, parentPath: string): void {
+    for (const element of array.getElements()) {
+      const object = resolveObjectLiteral(element);
+      if (!object) continue;
+      const pathNode = propertyInitializer(object, 'path');
+      const localPath = pathNode ? staticValue(pathNode) : undefined;
+      const effectivePath = localPath === undefined ? parentPath : joinRoutePath(parentPath, localPath);
+      const children = resolveArrayLiteral(propertyInitializer(object, 'children'));
+      const component = componentFromElementExpression(propertyInitializer(object, 'element'));
+      if (component && component.name !== 'Navigate' && pathNode) {
+        routes.push({
+          id: stableId('route', `${relativePath}:${effectivePath}:${component.name}:${component.file ?? ''}`),
+          path: normalizeRoute(effectivePath || '/'),
+          component: component.name,
+          ...(component.file ? { componentFile: component.file } : {}),
+          sourceRef: sourceRef(relativePath, object, component.name),
+        });
+      }
+      if (children) visitRouteObjects(children, effectivePath);
+    }
+  }
+}
+
+function resolveArrayLiteral(node: Node | undefined): import('ts-morph').ArrayLiteralExpression | undefined {
+  if (!node) return undefined;
+  const unwrapped = unwrapExpression(node);
+  if (Node.isArrayLiteralExpression(unwrapped)) return unwrapped;
+  if (!Node.isIdentifier(unwrapped)) return undefined;
+  const initializer = localVariableInitializer(unwrapped, unwrapped.getText());
+  return initializer && Node.isArrayLiteralExpression(unwrapExpression(initializer))
+    ? unwrapExpression(initializer) as import('ts-morph').ArrayLiteralExpression
+    : undefined;
+}
+
+function joinRoutePath(parent: string, child: string): string {
+  if (child.startsWith('/')) return normalizeRoute(child);
+  if (!child) return normalizeRoute(parent || '/');
+  return normalizeRoute(`${parent.replace(/\/$/, '')}/${child}`);
+}
+
 function discoverPages(
   source: SourceFile,
   relativePath: string,
@@ -355,6 +410,17 @@ function extractHandlers(source: SourceFile, relativePath: string, http: HttpOpe
     const initializer = declaration.getInitializer();
     if (initializer && (Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer))) {
       candidates.push({ name: declaration.getName(), node: initializer });
+      return;
+    }
+    if (initializer && Node.isCallExpression(initializer)) {
+      const callback = initializer.getArguments().find((argument) => Node.isArrowFunction(argument) || Node.isFunctionExpression(argument));
+      if (callback) candidates.push({ name: declaration.getName(), node: callback });
+    }
+  });
+  source.getDescendantsOfKind(SyntaxKind.PropertyAssignment).forEach((property) => {
+    const initializer = property.getInitializer();
+    if (initializer && (Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer))) {
+      candidates.push({ name: property.getName(), node: initializer });
     }
   });
   source.getDescendantsOfKind(SyntaxKind.JsxAttribute).forEach((attribute) => {
@@ -366,7 +432,7 @@ function extractHandlers(source: SourceFile, relativePath: string, http: HttpOpe
     }
   });
 
-  for (const candidate of candidates) {
+  for (const candidate of dedupe(candidates, (candidate) => `${candidate.name}:${candidate.node.getStart()}`)) {
     const callExpressions = candidate.node.getDescendantsOfKind(SyntaxKind.CallExpression).filter((call) => (
       nearestEnclosingFunction(call) === candidate.node
     ));
@@ -418,7 +484,7 @@ function nearestEnclosingFunction(node: Node): Node | undefined {
   ));
 }
 
-function extractHttpCall(call: CallExpression, relativePath: string): HttpOperationFact | undefined {
+function extractHttpCall(call: CallExpression, relativePath: string, axiosBasePath?: string): HttpOperationFact | undefined {
   const expression = call.getExpression().getText();
   const args = call.getArguments();
   let method: string | undefined;
@@ -452,6 +518,7 @@ function extractHttpCall(call: CallExpression, relativePath: string): HttpOperat
   }
 
   if (!method || !pathTemplate) return undefined;
+  pathTemplate = normalizeHttpPath(pathTemplate, expression, axiosBasePath);
   const callerSymbol = enclosingFunctionName(call);
   payloadShape ??= payloadNode
     ? extractPayloadShape(unwrapJsonSerialization(payloadNode), relativePath)
@@ -665,12 +732,15 @@ function resolveCallTarget(call: CallExpression): { symbol?: string; file?: stri
     Node.isFunctionDeclaration(candidate)
     || Node.isVariableDeclaration(candidate)
     || Node.isMethodDeclaration(candidate)
+    || Node.isPropertyAssignment(candidate)
   ));
   if (!declaration) return undefined;
   const targetName = Node.isFunctionDeclaration(declaration) || Node.isMethodDeclaration(declaration)
     ? declaration.getName()
     : Node.isVariableDeclaration(declaration)
       ? declaration.getName()
+      : Node.isPropertyAssignment(declaration)
+        ? declaration.getName()
       : undefined;
   const file = declaration.getSourceFile().getFilePath().replace(/^\//, '');
   return {
@@ -692,6 +762,16 @@ function dedupeSourceRefs(refs: SourceRef[]): SourceRef[] {
   const seen = new Set<string>();
   return refs.filter((ref) => {
     const key = `${ref.file}:${ref.line}:${ref.endLine ?? ''}:${ref.symbol ?? ''}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function dedupe<T>(values: T[], keyOf: (value: T) => string): T[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = keyOf(value);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -1001,11 +1081,12 @@ function extractAction(
       ? eventAttribute.getNameNode().getText().replace(/^on/, '').toLowerCase()
       : 'click';
   const handlerExpression = Node.isJsxAttribute(eventAttribute) ? jsxAttributeNodeExpression(eventAttribute) : undefined;
+  const callableHandlerExpression = eventHandlerCallback(handlerExpression) ?? handlerExpression;
   const handlerText = Node.isJsxAttribute(eventAttribute) ? jsxAttributeExpression(eventAttribute) : undefined;
-  const handlerName = handlerExpression && (Node.isArrowFunction(handlerExpression) || Node.isFunctionExpression(handlerExpression))
-    ? inlineHandlerName(handlerExpression)
-    : handlerText ? directCallableIdentifier(handlerText) : undefined;
-  const resolvedHandlerId = handlerExpression ? handlerIdentityFromExpression(handlerExpression, relativePath) : undefined;
+  const handlerName = callableHandlerExpression && (Node.isArrowFunction(callableHandlerExpression) || Node.isFunctionExpression(callableHandlerExpression))
+    ? inlineHandlerName(callableHandlerExpression)
+    : callableHandlerExpression ? directCallableIdentifier(callableHandlerExpression.getText()) : undefined;
+  const resolvedHandlerId = callableHandlerExpression ? handlerIdentityFromExpression(callableHandlerExpression, relativePath) : undefined;
   const namedHandlers = handlerName ? handlers.filter((candidate) => candidate.name === handlerName) : [];
   const handler = (resolvedHandlerId ? handlers.find((candidate) => candidate.id === resolvedHandlerId) : undefined)
     ?? (namedHandlers.length === 1 ? namedHandlers[0] : undefined);
@@ -1040,6 +1121,16 @@ function extractAction(
     ])],
     sourceRef: sourceRef(relativePath, opening, accessibleName),
   };
+}
+
+function eventHandlerCallback(expression: Node | undefined): Node | undefined {
+  if (!expression || !Node.isCallExpression(expression)) return undefined;
+  const factory = expression.getExpression().getText().split('.').at(-1);
+  if (!['handleSubmit'].includes(factory ?? '')) return undefined;
+  const callback = expression.getArguments()[0];
+  return callback && (Node.isIdentifier(callback) || Node.isArrowFunction(callback) || Node.isFunctionExpression(callback))
+    ? callback
+    : undefined;
 }
 
 function isSubmitControl(
@@ -2013,6 +2104,10 @@ function componentFromElementAttribute(attribute: Node | undefined): { name: str
   if (!attribute || !Node.isJsxAttribute(attribute)) return undefined;
   const initializer = attribute.getInitializer();
   const expression = initializer && Node.isJsxExpression(initializer) ? initializer.getExpression() : undefined;
+  return componentFromElementExpression(expression);
+}
+
+function componentFromElementExpression(expression: Node | undefined): { name: string; file?: string } | undefined {
   if (!expression) return undefined;
   const jsx = Node.isJsxSelfClosingElement(expression) || Node.isJsxElement(expression)
     ? expression
@@ -2049,9 +2144,14 @@ function staticValue(node: Node | undefined): string | undefined {
   if (Node.isTemplateExpression(node)) {
     let value = node.getHead().getLiteralText();
     for (const span of node.getTemplateSpans()) {
-      value += `{${span.getExpression().getText()}}${span.getLiteral().getLiteralText()}`;
+      value += `${staticValue(span.getExpression()) ?? `{${span.getExpression().getText()}}`}${span.getLiteral().getLiteralText()}`;
     }
     return value;
+  }
+  if (Node.isPropertyAccessExpression(node) && node.getExpression().getText() === 'this') {
+    const owner = node.getFirstAncestorByKind(SyntaxKind.ClassDeclaration);
+    const initializer = owner?.getProperty(node.getName())?.getInitializer();
+    if (initializer) return staticValue(initializer);
   }
   const scalar = staticScalar(unwrapExpression(node));
   if (scalar !== undefined) return String(scalar);
@@ -2063,10 +2163,37 @@ function normalizeRoute(value: string): string {
   return normalized.startsWith('/') ? normalized : `/${normalized}`;
 }
 
+function extractAxiosDefaultBasePath(sources: SourceFile[]): string | undefined {
+  const values = sources.flatMap((source) => source.getDescendantsOfKind(SyntaxKind.BinaryExpression)
+    .filter((expression) => expression.getOperatorToken().getKind() === SyntaxKind.EqualsToken
+      && expression.getLeft().getText() === 'axios.defaults.baseURL')
+    .map((expression) => staticValue(expression.getRight()))
+    .filter((value): value is string => Boolean(value))
+    .map((value) => urlPath(value)));
+  const unique = [...new Set(values)];
+  return unique.length === 1 ? unique[0] : undefined;
+}
+
+function normalizeHttpPath(value: string, expression: string, axiosBasePath?: string): string {
+  if (/^https?:\/\//i.test(value)) return urlPath(value);
+  const normalized = normalizeRoute(value);
+  if (!axiosBasePath || (!expression.startsWith('axios.') && !expression.startsWith('requests.'))) return normalized;
+  if (normalized === axiosBasePath || normalized.startsWith(`${axiosBasePath}/`)) return normalized;
+  return normalizeRoute(`${axiosBasePath}/${normalized.replace(/^\//, '')}`);
+}
+
+function urlPath(value: string): string {
+  const match = value.match(/^https?:\/\/[^/]+(\/[^?#]*)?(\?[^#]*)?/i);
+  if (!match) return normalizeRoute(value);
+  return normalizeRoute(`${match[1] ?? '/'}${match[2] ?? ''}`);
+}
+
 function enclosingFunctionName(node: Node): string | undefined {
   const functionNode = enclosingFunctionNode(node);
   if (!functionNode) return undefined;
   if (Node.isFunctionDeclaration(functionNode) || Node.isMethodDeclaration(functionNode)) return functionNode.getName();
+  const property = functionNode.getFirstAncestorByKind(SyntaxKind.PropertyAssignment);
+  if (property) return property.getName();
   const variable = functionNode.getFirstAncestorByKind(SyntaxKind.VariableDeclaration);
   return variable?.getName();
 }

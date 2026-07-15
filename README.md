@@ -69,6 +69,11 @@ The proof fixture currently discovers two materially different submission journe
 For your own application:
 
 ```bash
+# Optional but recommended when graphify.graph is configured. The official
+# package name has two ys; the executable has one.
+uv tool install graphifyy
+graphify extract /path/to/application --code-only --no-cluster
+
 cp flowctl.config.example.yaml flowctl.config.yaml
 node --import tsx src/cli.ts doctor --config flowctl.config.yaml --json
 node --import tsx src/cli.ts agent guide --config flowctl.config.yaml --json
@@ -132,7 +137,7 @@ Given only source code, teams often ask an AI assistant to “drive the applicat
 1. **Source owns executable facts.** Routes, handlers, guards, validations, permissions, API joins and effects must have source evidence.
 2. **Graphify is auxiliary evidence in v0.2.** Its imported nodes and edges appear in the evidence graph, but they do not narrow source retrieval, create joins or create executable transitions.
 3. **The LLM Wiki supplies labels in v0.2.** Imported headings and aliases can enrich glossary evidence and readable operation labels; they do not connect aliases across implementation layers or create rules.
-4. **The assistant is a bounded semantic worker.** It proposes labels, aliases and non-authoritative family hints through schema-constrained files; it does not mutate canonical artifacts or regroup deterministic flow families.
+4. **The assistant is a bounded semantic worker.** It may propose labels or a resolution for a compiler-listed authorization/success-predicate gap. Rule proposals are limited to packet-listed endpoints, evidence IDs and predicate paths; they affect canonical IR only after validation, named human approval and deterministic recompilation.
 5. **Humans own consequential ambiguity.** Important terminal operations, opaque predicates and corporate data access can require review.
 6. **Runtime confirms rather than rewrites.** Playwright grounding may repair a locator or adapter-internal readiness check, but cannot change actor eligibility, validation or expected effects; wait logic is not a persisted observation field.
 7. **Unknown stays unknown.** Unsupported reflection, dynamic dispatch or unavailable application-specific data becomes an explicit unresolved item.
@@ -167,6 +172,8 @@ For each successful backend mutation, the pipeline:
 
 The Java adapter can turn a bounded top-level `if (condition) throw ...` guard into the corresponding successful predicate. Complex control flow, named eligibility/rule calls, reflection and unsupported expressions remain conditional and require review; they are not silently treated as valid business logic.
 
+The React adapter supports JSX `<Route>` declarations and nested `createBrowserRouter([...])` object routes. It also follows common source-resolved callback layers such as object API methods, Redux Toolkit async-thunk callbacks and React Hook Form `handleSubmit(callback)`, and applies one statically declared `axios.defaults.baseURL` when normalizing HTTP paths. Unsupported component composition remains explicit; a configured transparent component is never treated as though its hidden controls were extracted.
+
 The important output is the proof chain, not only the variant name:
 
 ```text
@@ -197,6 +204,18 @@ A behavior signature includes the actor contract, ordered pages/actions, active 
 This is controlled equivalence-class generation, not Cartesian permutation.
 
 Completeness is checked per in-scope backend operation. `coverage.json.operationCoverage` marks each operation `covered`, `conditional` or `uncovered` and identifies the first missing stage: frontend-client join, action-operation join, success continuation, family, entry-to-success witness or behavior variant. Any uncovered in-scope operation keeps the guide in `ANALYSIS_REQUIRED`; a few discovered flows are not presented as complete application coverage.
+
+### Current source support
+
+| Area | Supported examples | Conservative boundary |
+| --- | --- | --- |
+| React routing | JSX `<Route>` and nested `createBrowserRouter` object trees | Computed route tables remain unresolved |
+| UI actions/forms | Native/MUI-style controls, direct handlers, `handleSubmit(callback)` | Unknown event factories and uninlined custom components remain conditional |
+| Frontend calls | Fetch/Axios, one static global Axios base URL, source-resolved object methods and async-thunk callbacks | Dynamic client configuration or ambiguous dispatch stays unresolved |
+| Spring operations | Request mappings, Bean Validation, supported method security and terminal effects | Global/dynamic security and delegated domain rules create a rule packet or remain review-only |
+| Graphify | Imported provenance plus agent-side scoped architecture queries | Graphify edges never create executable Flowctl joins by themselves |
+
+`coverage` reports the first failed join for every in-scope operation. This makes an unfamiliar repository useful even when it yields zero variants: the CLI distinguishes an absent HTTP match from an unresolved action chain, missing navigation, conditional rule or traversal bound instead of emitting partial BDD as complete coverage.
 
 ## Business Logic IR
 
@@ -294,6 +313,8 @@ Flowctl always excludes `output.directory` from source analysis. Keep runtime ad
 Then run:
 
 ```bash
+# Run this first when graphify.required is true.
+graphify extract . --code-only --no-cluster
 node --import tsx src/cli.ts doctor --json
 node --import tsx src/cli.ts discover --json
 node --import tsx src/cli.ts flows list --json
@@ -310,11 +331,12 @@ When `next` reports an agent packet:
 node --import tsx src/cli.ts packet inspect <packet-id> --json
 # The approved VS Code assistant writes only the requested proposal file.
 node --import tsx src/cli.ts packet validate <packet-id> --json
+# Validation reports the exact canonical artifacts that approval would recompile.
 node --import tsx src/cli.ts review approve <packet-id> --reviewer <corporate-id>
 node --import tsx src/cli.ts analyze --through coverage
 ```
 
-See the [prompt playbook](docs/prompts.md) for copy-ready Copilot/Roo/Cline prompts.
+Operation-label packets change readable business-command metadata. Operation-rule packets may resolve only their listed authorization and successful-acceptance gaps. An agent may write and validate either proposal, but only a named human may approve it. See the [prompt playbook](docs/prompts.md) for copy-ready Copilot/Roo/Cline prompts.
 
 ### 5. Plan and bind application data
 

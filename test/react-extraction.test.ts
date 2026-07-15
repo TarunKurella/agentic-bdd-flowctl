@@ -4,6 +4,62 @@ import type { SourceFile } from '../src/adapters/source.js';
 import { solvePredicate } from '../src/ir/predicates.js';
 
 describe('React flow extraction', () => {
+  it('extracts nested createBrowserRouter object routes with source-resolved pages', () => {
+    const result = extractReact([
+      tsxAt('frontend/src/router.tsx', `
+        import { createBrowserRouter } from 'react-router-dom';
+        import HomePage from './HomePage';
+        import CheckoutPage from './CheckoutPage';
+        export const router = createBrowserRouter([{ path: '/', element: <main />, children: [
+          { path: '', element: <HomePage /> },
+          { path: 'checkout', element: <CheckoutPage /> },
+        ] }]);
+      `),
+      tsxAt('frontend/src/HomePage.tsx', `export default function HomePage() { return <h1>Home</h1>; }`),
+      tsxAt('frontend/src/CheckoutPage.tsx', `export default function CheckoutPage() { return <button>Place order</button>; }`),
+    ]);
+
+    expect(result.routes.map((route) => [route.path, route.component])).toEqual(expect.arrayContaining([
+      ['/', 'HomePage'],
+      ['/checkout', 'CheckoutPage'],
+    ]));
+    expect(result.pages.find((page) => page.name === 'HomePage')?.routeIds).toHaveLength(1);
+    expect(result.pages.find((page) => page.name === 'CheckoutPage')?.routeIds).toHaveLength(1);
+  });
+
+  it('normalizes axios base URLs and resolves common callback wrappers across handlers', () => {
+    const result = extractReact([
+      tsxAt('frontend/src/api.ts', `
+        import axios from 'axios';
+        axios.defaults.baseURL = 'http://localhost:8080/api/';
+        const requests = { post: (url: string, body: object) => axios.post(url, body) };
+        const Account = { login: (values: object) => requests.post('auth/login', values) };
+        export default { Account };
+      `),
+      tsxAt('frontend/src/state.ts', `
+        import agent from './api';
+        declare function createAsyncThunk(name: string, callback: Function): unknown;
+        export const signInUser = createAsyncThunk('auth/login', async (data: object) => agent.Account.login(data));
+      `),
+      tsxAt('frontend/src/LoginPage.tsx', `
+        import { signInUser } from './state';
+        export function LoginPage() {
+          async function submitForm(data: object) { await signInUser(data); }
+          return <form onSubmit={handleSubmit(submitForm)}><button type="submit">Sign in</button></form>;
+        }
+      `),
+    ]);
+
+    expect(result.httpOperations.find((operation) => operation.method === 'POST')).toMatchObject({
+      pathTemplate: '/api/auth/login',
+      callerSymbol: 'login',
+    });
+    expect(result.actions[0]).toMatchObject({ handlerName: 'submitForm', handlerResolution: 'exact' });
+    expect(result.handlers.find((handler) => handler.name === 'signInUser')?.callSites).toEqual(expect.arrayContaining([
+      expect.objectContaining({ targetFile: 'frontend/src/api.ts', targetSymbol: 'login' }),
+    ]));
+  });
+
   it('extracts guarded declarative routes and leaves dynamic targets conditional', () => {
     const result = extractReact([tsx(`
       export function RoutingPage() {

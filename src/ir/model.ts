@@ -263,11 +263,12 @@ export interface PermissionFact {
   id: string;
   authority: string;
   layer: 'frontend' | 'backend';
+  origin?: EvidenceOrigin;
   sourceRef: SourceRef;
 }
 
 export interface JavaAuthorizationFact {
-  status: 'anonymous' | 'exact' | 'conditional';
+  status: 'anonymous' | 'authenticated' | 'exact' | 'conditional';
   sourceExpression?: string;
   reason?: string;
   sourceRefs: SourceRef[];
@@ -286,6 +287,13 @@ export interface JavaEndpointFact {
   permissionIds: string[];
   validationIds: string[];
   terminalEffectIds: string[];
+  semanticResolution?: {
+    packetId: string;
+    reviewer: string;
+    approvedAt: string;
+    proposalDigest: string;
+    evidenceRefs: string[];
+  };
   sourceRef: SourceRef;
 }
 

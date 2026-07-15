@@ -9,7 +9,12 @@ import { extractReact } from '../adapters/react.js';
 import { extractJava } from '../adapters/java.js';
 import { importGraphify } from '../adapters/graphify.js';
 import { importWiki } from '../adapters/wiki.js';
-import { applyApprovedOperationDecisions, createOperationPacket } from '../agent/packets.js';
+import {
+  applyApprovedOperationDecisions,
+  applyApprovedRuleDecisions,
+  createOperationPacket,
+  createRulePacket,
+} from '../agent/packets.js';
 import { analyzeRequestPayloads } from '../contracts/request-payload.js';
 import type { ExtractionBundle, FlowVariants, OperationCatalog, PageContracts, RuntimeBindings } from '../ir/model.js';
 import {
@@ -89,9 +94,6 @@ export async function analyze(config: FlowctlConfig, through: Stage = 'coverage'
     graphifyEdges: graphify.edges,
     diagnostics: [...react.diagnostics, ...java.diagnostics, ...graphify.diagnostics, ...wiki.diagnostics],
   };
-  const requestPayloadAnalysis = analyzeRequestPayloads(bundle);
-  bundle.requestContracts = requestPayloadAnalysis.contracts;
-  bundle.diagnostics.push(...requestPayloadAnalysis.diagnostics);
   const completedStages: Stage[] = [];
   const files: string[] = [];
   const stopAfter = (stage: Stage) => STAGES.indexOf(through) <= STAGES.indexOf(stage);
@@ -99,6 +101,19 @@ export async function analyze(config: FlowctlConfig, through: Stage = 'coverage'
   let pages: PageContracts | undefined;
   let variants: FlowVariants | undefined;
 
+  const rawEvidence = buildEvidenceGraph(bundle);
+  await store.write('evidence', store.createEnvelope({
+    artifactType: 'evidence-graph',
+    producer: 'evidence:link',
+    sourceDigest: snapshot.digest,
+    data: rawEvidence,
+    unresolved: rawEvidence.diagnostics,
+  }));
+  await createRulePacket(store, bundle);
+  await applyApprovedRuleDecisions(store, bundle);
+  const requestPayloadAnalysis = analyzeRequestPayloads(bundle);
+  bundle.requestContracts = requestPayloadAnalysis.contracts;
+  bundle.diagnostics.push(...requestPayloadAnalysis.diagnostics);
   const evidence = buildEvidenceGraph(bundle);
   const evidenceEnvelope = store.createEnvelope({ artifactType: 'evidence-graph', producer: 'evidence:link', sourceDigest: snapshot.digest, data: evidence, unresolved: evidence.diagnostics });
   files.push(await store.write('evidence', evidenceEnvelope));

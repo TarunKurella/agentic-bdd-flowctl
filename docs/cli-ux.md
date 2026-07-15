@@ -115,7 +115,7 @@ State is computed from facts:
 - generated, bound, unconfirmed and missing requirements in the one project-specific application-data file;
 - exact current runtime bindings for every required actor-session, entry/intermediate/success screen, active editable field on interaction screens through the final action, and witness action occurrence. The terminal success-screen occurrence is probe-only.
 
-Semantic packet review is a side gate. The guide can surface an inspect, validate or approve action without letting an assistant change executable graph meaning.
+Packet review is a side gate. The guide can surface an inspect, validate or approve action. Label packets affect wording only. Rule packets can affect executable graph meaning only through their compiler-listed gaps after schema/evidence/predicate validation, named human approval and deterministic recompilation.
 
 ## Flow and graph inspection
 

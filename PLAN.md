@@ -53,6 +53,7 @@ Acceptance: the fixture yields materially distinct successful variants when beha
 - [x] File-mediated agent packets
 - [x] Schema/evidence validation
 - [x] Review decisions
+- [x] Bounded authorization/success-predicate rule packets with downstream recompilation
 
 Acceptance: the tool automatically accepts only source-derived concrete representatives and refuses to invent UAT identifiers, product codes, eligible identities or existing entities. All other application-specific values are bound once in `.flowctl/application-data.local.yaml` and require human confirmation.
 
@@ -94,9 +95,10 @@ Acceptance: a developer or approved coding assistant can start with `flowctl dis
 - [ ] Direct execution against a live corporate application
 - [ ] Approved UAT resolver integration
 - [ ] Additional React form/router conventions
+- [x] Nested `createBrowserRouter`, Axios base URL, async-thunk and `handleSubmit` conventions
 - [ ] Read-only business terminal types
 - [ ] Bug-finding contradiction passes
 
 The unchecked items require a real target application, environment or future bug-finding scope; they do not weaken the local vertical slice.
 
-Current v0.2 boundaries: Graphify is imported only as auxiliary evidence; Wiki headings/aliases enrich glossary evidence and readable labels but do not connect implementation layers; complex Java rule control flow and ambiguous entity relationships remain review-only; dynamic repeated-row action templates are not implemented.
+Current v0.2 boundaries: Graphify is imported only as auxiliary evidence; Wiki headings/aliases enrich glossary evidence and readable labels but do not connect implementation layers; complex Java rule control flow stays review-only unless a bounded rule packet has enough independent evidence, passes validation and receives named human approval; ambiguous entity relationships and dynamic repeated-row action templates are not implemented.

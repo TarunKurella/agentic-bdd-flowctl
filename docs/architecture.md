@@ -208,7 +208,7 @@ READY (ready for a Playwright run; no pass claim)
 
 `flowctl guide` shows the complete state, blockers and ordered actions. `flowctl next` returns one primary action. `flowctl agent prompt` converts the same state into a bounded, copy-ready assistant prompt. The prompt is therefore a view of compiler state, not a second workflow engine.
 
-Semantic packets are orthogonal review work. They can request labels, aliases, family hints or explanations at a bounded stage, but cannot introduce new graph edges, predicates or runtime/data claims. A family hint is reviewed metadata in v0.2; it does not override deterministic operation-based family construction.
+Packets are orthogonal review work. Label packets request labels, aliases, family hints or explanations and cannot change executable graph meaning. Rule packets are created only for compiler-detected conditional authorization or successful-acceptance gaps. They can select a bounded authorization shape or a predicate in the existing exact grammar, but only for packet-listed endpoints, evidence IDs and request paths. Validation rejects new paths and silent omissions; named human approval plus deterministic recompilation is required before the accepted fact reaches evidence, actors, behavior, witnesses, variants, data requirements or BDD. Neither packet type can add graph edges, validation values, runtime success or application data. A family hint remains reviewed metadata and does not override operation-based family construction.
 
 ## Runtime grounding boundary
 
