@@ -550,6 +550,18 @@ npm run demo
 npm run demo:bdd
 ```
 
+## CI and releases
+
+Every pull request and push to `main` is verified on both the minimum supported Node.js version (20) and Node.js 22. CI installs the locked dependency graph without lifecycle scripts, typechecks, runs the complete test suite, builds the compiler, packs the exact distributable archive, installs it in an empty temporary project, and launches the installed `flowctl` binary. Superseded runs on the same branch are cancelled automatically.
+
+GitHub Actions dependencies are pinned to immutable commits. A tag such as `v0.2.0` starts the release workflow only when it exactly matches the version in `package.json`. The workflow repeats all verification, then publishes a GitHub Release containing the installable `.tgz` archive and `SHA256SUMS.txt`. It does not publish to npm or require organization-specific deployment credentials.
+
+```bash
+# Maintainer release procedure after updating package.json and merging to main.
+git tag v0.2.0
+git push origin v0.2.0
+```
+
 When changing extraction or graph semantics, include a focused unit case and an end-to-end fixture assertion that proves the resulting lineage.
 
 ## Corporate safety model

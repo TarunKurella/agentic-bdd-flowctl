@@ -5,25 +5,44 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   verify:
+    name: Node.js ${{ matrix.node-version }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version:
+          - "20"
+          - "22"
+
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: 22
-          package-manager-cache: false
+          node-version: ${{ matrix.node-version }}
+          cache: npm
 
       - name: Install locked dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
-      - name: Verify compiler and golden fixture
+      - name: Typecheck, test, and build
         run: npm run check
+
+      - name: Verify distributable CLI
+        run: npm run check:package

@@ -7,10 +7,17 @@
   "bin": {
     "flowctl": "./dist/src/cli.js"
   },
+  "files": [
+    "dist/src",
+    "schemas",
+    "flowctl.config.example.yaml",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "node --import tsx src/cli.ts",
     "check": "npm run typecheck && npm run test && npm run build",
+    "check:package": "node scripts/check-package.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
