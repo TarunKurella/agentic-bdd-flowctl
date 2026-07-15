@@ -7,7 +7,7 @@ import { ArtifactStore } from '../src/core/artifact-store.js';
 import { loadConfig } from '../src/core/config.js';
 import { buildGraphSummary, buildVariantTrace, listFlows } from '../src/graph/trace.js';
 import { analyze } from '../src/pipeline/analyze.js';
-import { successEnvelope } from '../src/ux/cli-envelope.js';
+import { failureEnvelope, successEnvelope } from '../src/ux/cli-envelope.js';
 import { buildAgentPrompt, buildProjectGuide } from '../src/ux/guide.js';
 import type { CoverageReport, FlowVariants } from '../src/ir/model.js';
 import { buildSourceRepairPlan } from '../src/ux/source-repair.js';
@@ -207,14 +207,80 @@ describe('agentic CLI experience', () => {
   });
 
   it('wraps machine output in the stable CLI envelope', () => {
-    expect(successEnvelope({ command: 'flows list', result: { variants: 2 } })).toMatchObject({
+    const envelope = successEnvelope({ command: 'flows list', result: { variants: 2 } });
+    expect(envelope).toMatchObject({
       schemaVersion: 'flowctl.cli.v1',
       command: 'flows list',
       ok: true,
       code: 'OK',
       nextActions: [],
       diagnostics: [],
+      agent: {
+        schemaVersion: 'flowctl.agent.v1',
+        disposition: 'inspect',
+        retryPolicy: { maxAttemptsWithoutStateChange: 1 },
+      },
     });
+    expect(successEnvelope({ command: 'flows list', result: { variants: 3 } }).agent.directiveId)
+      .not.toBe(envelope.agent.directiveId);
+  });
+
+  it('steers an agent through exactly one primary action and states the required postcondition', () => {
+    const action = {
+      id: 'generate-bdd',
+      kind: 'bdd' as const,
+      executor: 'agent' as const,
+      title: 'Generate BDD',
+      reason: 'The witness is current but the feature is absent.',
+      command: 'flowctl bdd generate --flow application.submit',
+      blocking: true,
+    };
+    const envelope = successEnvelope({
+      command: 'agent guide',
+      code: 'BDD_GENERATION_REQUIRED',
+      result: {},
+      nextActions: [action],
+      resumeCommand: 'flowctl agent guide --variant application.submit.personal --config app.yaml --json',
+    });
+
+    expect(envelope.agent).toMatchObject({
+      disposition: 'execute',
+      primaryAction: { id: 'generate-bdd', command: `${action.command} --json` },
+      afterAction: {
+        expectedStateChange: expect.stringContaining('feature'),
+        resumeCommand: expect.stringContaining('--variant application.submit.personal'),
+      },
+      retryPolicy: {
+        allowed: true,
+        maxAttemptsWithoutStateChange: 1,
+        requiresStateChangeBeforeRepeat: true,
+      },
+    });
+    expect(envelope.agent.instruction).toContain('Do not edit the generated feature');
+  });
+
+  it('turns human actions and security failures into explicit stop directives', () => {
+    const humanAction = {
+      id: 'confirm-data',
+      kind: 'data' as const,
+      executor: 'human' as const,
+      title: 'Confirm data',
+      reason: 'A named reviewer must attest to the application value.',
+      command: 'flowctl data confirm --requirement requirement.id --reviewer <corporate-id>',
+      blocking: true,
+    };
+    expect(successEnvelope({ command: 'agent guide', result: {}, nextActions: [humanAction] }).agent).toMatchObject({
+      disposition: 'stop-for-human',
+      retryPolicy: { allowed: false, maxAttemptsWithoutStateChange: 0 },
+    });
+    const denied = failureEnvelope({
+      command: 'ground run',
+      code: 'SECURITY_POLICY_DENIED',
+      message: 'Runner command is not approved.',
+    });
+    expect(denied.agent.disposition).toBe('stop-for-human');
+    expect(denied.agent.instruction).toContain('Stop');
+    expect(denied.nextActions).toEqual([]);
   });
 
   it('marks the model stale when Graphify or source evidence changes', async () => {

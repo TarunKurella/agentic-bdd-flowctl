@@ -91,7 +91,7 @@ Long analysis can stream progress without corrupting the final JSON response:
 flowctl discover --json --progress jsonl
 ```
 
-The final `flowctl.cli.v1` envelope stays on stdout. Versioned `flowctl.progress.v1` JSONL events go to stderr, so an IDE, CI wrapper or VS Code assistant can show live progress while parsing the result safely.
+The final `flowctl.cli.v1` envelope stays on stdout. Every current JSON envelope also carries a `flowctl.agent.v1` directive: one primary action, an exact machine-readable command, its expected state change, the exact guide resume command, retry limits, human stop conditions and safety guardrails. Versioned `flowctl.progress.v1` JSONL events go to stderr, so an IDE, CI wrapper or VS Code assistant can show live progress while parsing the result safely.
 
 Every analysis/discovery run is recorded, and runtime grounding manifests appear in the same read-only run view:
 
@@ -482,7 +482,7 @@ flowctl coverage
 flowctl explain <kind> <id>
 ```
 
-Project commands accept `--config <path>` and `--json`; `init` instead accepts its destination directory. Machine output uses one stable `flowctl.cli.v1` envelope containing `command`, `ok`, `code`, optional project/target context, `result`, `nextActions` and `diagnostics`. `analyze` and `discover` additionally accept `--progress jsonl`, which writes `flowctl.progress.v1` events to stderr while reserving stdout for the final envelope. Scripts should use these contracts and the process exit code rather than scrape human prose.
+Project commands accept `--config <path>` and `--json`; `init` instead accepts its destination directory. Machine output uses one stable `flowctl.cli.v1` envelope containing `command`, `ok`, `code`, optional project/target context, `result`, `nextActions`, `diagnostics` and a `flowctl.agent.v1` execution directive. Agents execute only `agent.primaryAction.command`, verify `agent.afterAction.expectedStateChange`, and then use the exact `resumeCommand`. A repeated `directiveId` without state change is non-progress, not permission to retry. `analyze` and `discover` additionally accept `--progress jsonl`, which writes `flowctl.progress.v1` events to stderr while reserving stdout for the final envelope.
 
 ## Repository layout
 

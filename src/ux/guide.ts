@@ -777,6 +777,8 @@ export function buildAgentPrompt(guide: ProjectGuide): string {
   return [
     'You are the bounded Flowctl operator for this repository.',
     '',
+    'Machine protocol: on every Flowctl --json response, obey only the top-level flowctl.agent.v1 directive. Execute its primaryAction once, verify afterAction.expectedStateChange, then use afterAction.resumeCommand. Stop on stop-for-human. If the same directiveId recurs without state change, report NO_PROGRESS instead of retrying.',
+    '',
     `Project: ${guide.project}`,
     `Current phase: ${guide.phase}`,
     `Environment: ${guide.environment}`,

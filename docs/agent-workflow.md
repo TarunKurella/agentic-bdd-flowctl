@@ -26,7 +26,7 @@ After flow discovery, select one variant and environment:
 flowctl agent guide --variant <variant-id> --env <environment> --json
 ```
 
-The assistant performs the first applicable action, then reruns the same command. A source-repair action is different: `repair plan` is an evidence packet, so the assistant must inspect and repair the cited source pattern before rediscovery. Repeating unchanged coverage is not progress.
+The assistant obeys the top-level `flowctl.agent.v1` directive in every JSON response. It executes only `primaryAction.command`, verifies `afterAction.expectedStateChange`, then runs the exact `resumeCommand`. A `stop-for-human` disposition is a hard stop. A repeated `directiveId` without a relevant digest/state change is `NO_PROGRESS`, not a retry opportunity. A source-repair action is different: `repair plan` is an evidence packet, so the assistant must inspect and repair the cited source pattern before rediscovery.
 
 ## Generated prompt handoff
 

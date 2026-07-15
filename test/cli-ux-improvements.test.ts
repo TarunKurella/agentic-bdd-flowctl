@@ -60,7 +60,16 @@ describe('improved CLI operator experience', () => {
       '--progress',
       'jsonl',
     ], { cwd: path.resolve('.') });
-    const envelope = JSON.parse(result.stdout) as { schemaVersion: string; result: { analysis: { runId: string } } };
+    const envelope = JSON.parse(result.stdout) as {
+      schemaVersion: string;
+      result: { analysis: { runId: string } };
+      agent: {
+        schemaVersion: string;
+        disposition: string;
+        primaryAction: { id: string; command: string };
+        afterAction: { resumeCommand: string };
+      };
+    };
     const events = result.stderr.trim().split('\n').map((line) => JSON.parse(line) as {
       schemaVersion: string;
       event: string;
@@ -69,6 +78,14 @@ describe('improved CLI operator experience', () => {
     });
 
     expect(envelope.schemaVersion).toBe('flowctl.cli.v1');
+    expect(envelope.agent).toMatchObject({
+      schemaVersion: 'flowctl.agent.v1',
+      disposition: 'execute',
+      primaryAction: { id: 'select-flow' },
+    });
+    expect(envelope.agent.afterAction.resumeCommand).toContain(`--config '${configPath}'`);
+    expect(envelope.agent.afterAction.resumeCommand).toContain('--variant SELECTED_VARIANT_ID');
+    expect(envelope.agent.primaryAction.command).toContain('--json');
     expect(envelope.result.analysis.runId).toMatch(/^analysis\./);
     expect(events[0]).toMatchObject({ schemaVersion: 'flowctl.progress.v1', event: 'analysis.started', command: 'discover', sequence: 1 });
     expect(events.at(-1)?.event).toBe('analysis.completed');
@@ -87,6 +104,60 @@ describe('improved CLI operator experience', () => {
     expect(latest.paths.coverageReport).toBe(store.artifactPath('coverage'));
     expect(latest.paths.dataRequirements).toBe(store.dataRequirementsDirectory);
     expect(latest.resume?.command).toContain('agent guide');
+  });
+
+  it('steers the agent from flow catalog output into proof inspection and a variant-scoped guide', async () => {
+    const result = await execute(process.execPath, [
+      '--import',
+      'tsx',
+      'src/cli.ts',
+      'flows',
+      'list',
+      '--config',
+      configPath,
+      '--json',
+    ], { cwd: path.resolve('.') });
+    const envelope = JSON.parse(result.stdout) as {
+      agent: {
+        disposition: string;
+        primaryAction: { id: string; command: string };
+        afterAction: { resumeCommand: string };
+      };
+    };
+
+    expect(envelope.agent).toMatchObject({
+      disposition: 'execute',
+      primaryAction: { id: 'select-flow-from-catalog' },
+    });
+    expect(envelope.agent.primaryAction.command).toContain('flows show SELECTED_VARIANT_ID');
+    expect(envelope.agent.primaryAction.command).toContain('--json');
+    expect(envelope.agent.afterAction.resumeCommand).toContain('--variant SELECTED_VARIANT_ID');
+  });
+
+  it('stops the agent with exact application-data questions instead of looping back to data plan', async () => {
+    const result = await execute(process.execPath, [
+      '--import',
+      'tsx',
+      'src/cli.ts',
+      'data',
+      'plan',
+      '--flow',
+      'application.submit.joint',
+      '--config',
+      configPath,
+      '--json',
+    ], { cwd: path.resolve('.') });
+    const envelope = JSON.parse(result.stdout) as {
+      result: { bindingRequests: unknown[] };
+      agent: { disposition: string; instruction: string; retryPolicy: { allowed: boolean } };
+    };
+
+    expect(envelope.result.bindingRequests.length).toBeGreaterThan(0);
+    expect(envelope.agent).toMatchObject({
+      disposition: 'stop-for-human',
+      retryPolicy: { allowed: false },
+    });
+    expect(envelope.agent.instruction).toContain('Never fill <...> placeholders');
   });
 
   it('includes exact unresolved-data and report paths in lifecycle guidance', async () => {

@@ -31,9 +31,57 @@
     },
     "result": {},
     "nextActions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
-    "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }
+    "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } },
+    "agent": { "$ref": "#/$defs/agentDirective" }
   },
   "$defs": {
+    "agentDirective": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "directiveId", "disposition", "stateCode", "objective", "instruction", "selectionRule", "afterAction", "retryPolicy", "stopConditions", "guardrails"],
+      "properties": {
+        "schemaVersion": { "const": "flowctl.agent.v1" },
+        "directiveId": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "disposition": { "enum": ["execute", "inspect", "stop-for-human", "complete"] },
+        "stateCode": { "type": "string", "minLength": 1 },
+        "objective": { "type": "string", "minLength": 1 },
+        "instruction": { "type": "string", "minLength": 1 },
+        "selectionRule": { "type": "string", "minLength": 1 },
+        "primaryAction": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "executor", "command", "reason"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "executor": { "enum": ["agent", "human"] },
+            "command": { "type": "string", "minLength": 1 },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        },
+        "afterAction": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["expectedStateChange", "resumeCommand", "ifStateUnchanged"],
+          "properties": {
+            "expectedStateChange": { "type": "string", "minLength": 1 },
+            "resumeCommand": { "type": "string", "minLength": 1 },
+            "ifStateUnchanged": { "type": "string", "minLength": 1 }
+          }
+        },
+        "retryPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowed", "maxAttemptsWithoutStateChange", "requiresStateChangeBeforeRepeat"],
+          "properties": {
+            "allowed": { "type": "boolean" },
+            "maxAttemptsWithoutStateChange": { "type": "integer", "minimum": 0, "maximum": 1 },
+            "requiresStateChangeBeforeRepeat": { "type": "boolean" }
+          }
+        },
+        "stopConditions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "guardrails": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
     "action": {
       "type": "object",
       "additionalProperties": false,

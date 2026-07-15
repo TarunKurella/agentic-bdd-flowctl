@@ -19,7 +19,7 @@ import { bindRequirement, confirmRequirement, readVariantRequirements, verifyVar
 import { compileExecutionPlan } from './runtime/execution-plan.js';
 import { normalizeFlowctlError } from './core/errors.js';
 import { shellQuote } from './core/command.js';
-import { failureEnvelope, successEnvelope } from './ux/cli-envelope.js';
+import { failureEnvelope, successEnvelope, type AgentDirectiveOverride } from './ux/cli-envelope.js';
 import { inspectProjectHealth, renderDoctor } from './ux/doctor.js';
 import { buildSourceRepairPlan, renderSourceRepairPlan } from './ux/source-repair.js';
 import { listRuns, renderRun, renderRunList, showRun } from './ux/runs.js';
@@ -28,6 +28,7 @@ import {
   buildProjectGuide,
   renderNextAction,
   renderProjectGuide,
+  type GuideAction,
   type ProjectGuide,
 } from './ux/guide.js';
 import {
@@ -231,7 +232,24 @@ withConfig(flows.command('list').description('List discovered flow variants and 
   .action(async (options: ConfigOptions) => {
     const config = await loadConfig(options.config);
     const values = await listFlows(new ArtifactStore(config));
-    print({ variants: values }, options.json, renderFlowList(values), { command: 'flows list', config });
+    const nextActions: GuideAction[] = values.length ? [{
+      id: 'select-flow-from-catalog',
+      kind: 'inspect',
+      executor: 'agent',
+      title: 'Select one material behavior variant',
+      reason: 'The catalog is current; compare actor, page, action, assignment and feasibility differences before selecting an exact ID.',
+      command: `flowctl flows show SELECTED_VARIANT_ID --config ${shellQuote(config.configPath)}`,
+      blocking: true,
+    }] : [{
+      id: 'recover-with-guide',
+      kind: 'inspect',
+      executor: 'agent',
+      title: 'Diagnose why no variants exist',
+      reason: 'The current catalog is empty; lifecycle guidance will distinguish stale analysis from bounded source repair.',
+      command: `flowctl agent guide --env ${shellQuote(config.runtime.environment)} --config ${shellQuote(config.configPath)}`,
+      blocking: true,
+    }];
+    print({ variants: values }, options.json, renderFlowList(values), { command: 'flows list', config, nextActions });
   });
 withConfig(flows.command('show <variant-id>').description('Show the full graph proof for one variant.'))
   .action(async (variantId: string, options: ConfigOptions) => {
@@ -286,8 +304,18 @@ withConfig(runs.command('show <run-id>').description('Show one run; use latest f
 const packet = program.command('packet').description('Inspect and validate file-mediated agent packets.');
 withConfig(packet.command('inspect <packet-id>'))
   .action(async (packetId: string, options: ConfigOptions) => {
-    const store = new ArtifactStore(await loadConfig(options.config));
-    print(await inspectPacket(store, packetId), options.json);
+    const config = await loadConfig(options.config);
+    const store = new ArtifactStore(config);
+    print(await inspectPacket(store, packetId), options.json, undefined, {
+      command: 'packet inspect',
+      config,
+      agentOverride: {
+        disposition: 'inspect',
+        instruction: `Inspect only the packet-listed evidence and allowed fields. Write one schema-constrained proposal to outputPath, leave unsupported items unresolved, then run flowctl packet validate ${shellQuote(packetId)} --config ${shellQuote(config.configPath)} --json. Do not modify canonical artifacts.`,
+        expectedStateChange: 'A proposal exists only at the packet outputPath and passes flowctl packet validate; canonical graph meaning is still unchanged until human approval and recompilation.',
+        ifStateUnchanged: 'Do not inspect the same packet repeatedly. Either write the bounded proposal, explicitly leave items unresolved, or stop for missing evidence.',
+      },
+    });
   });
 withConfig(packet.command('validate <packet-id>'))
   .action(async (packetId: string, options: ConfigOptions) => {
@@ -325,7 +353,7 @@ withConfig(data.command('plan'))
     const missingIds = new Set(verification.missing.map((requirement) => requirement.id));
     const bindingRequests = requirements.filter((requirement) => missingIds.has(requirement.id)).map((requirement) => {
       const bindCommandTemplates = requirement.resolutionStrategies.map((strategy) => (
-        `flowctl data bind --requirement ${shellQuote(requirement.id)} --alias <approved-alias> --resolver ${shellQuote(strategy)} ${bindingArgumentTemplate(requirement.classification)} --config ${shellQuote(config.configPath)}`
+        `flowctl data bind --requirement ${shellQuote(requirement.id)} --alias <approved-alias> --resolver ${shellQuote(strategy)} ${bindingArgumentTemplate(requirement.classification)} --config ${shellQuote(config.configPath)} --json`
       ));
       return {
         requirementId: requirement.id,
@@ -388,6 +416,24 @@ withConfig(data.command('plan'))
           message: `${request.fieldPath} is bound as ${request.alias} but requires named human confirmation.`,
         })),
       ],
+      ...(!verification.ready ? {
+        agentOverride: {
+          disposition: 'stop-for-human' as const,
+          instruction: bindingRequests.length
+            ? 'Stop and present bindingRequests plus applicationDataConfigTemplate to the user. Ask for approved application-specific aliases, provider references or values. Never fill <...> placeholders or invent UAT data. After the user supplies values, bind them with the listed command templates; a named human must still confirm them.'
+            : 'Stop and present confirmationRequests to a named human. The agent must not execute data confirm or attest to its own bindings.',
+          expectedStateChange: bindingRequests.length
+            ? 'Approved application values or provider references are supplied by a human and bound under their stable requirement IDs.'
+            : 'A named human confirms each listed binding.',
+          retryAllowed: false,
+        },
+      } : {
+        agentOverride: {
+          disposition: 'inspect' as const,
+          instruction: `Application data is ready for ${options.flow}. Run the exact resume command to continue to runtime grounding; do not claim the journey has executed.`,
+          expectedStateChange: 'The lifecycle advances from application-data readiness to runtime adapter/grounding guidance.',
+        },
+      }),
     });
   });
 withConfig(data.command('bind'))
@@ -460,6 +506,12 @@ withConfig(groundAdapters.command('plan'))
       command: 'ground adapters plan',
       config,
       target: { variantId: options.variant },
+      agentOverride: {
+        disposition: 'inspect',
+        instruction: `Implement every target from this plan in application-owned Playwright adapter code, using durable role, label, test-id or registered component contracts. Then run flowctl ground adapters verify --variant ${shellQuote(options.variant)} --config ${shellQuote(config.configPath)} --json. Do not rerun the plan or guess selectors from one snapshot.`,
+        expectedStateChange: 'The configured adapter manifest contains a current implementation for every planned actor, screen, field and action target, and adapter verification passes.',
+        ifStateUnchanged: 'Do not regenerate the same scaffold. Report which target cannot be implemented and its source/runtime evidence.',
+      },
     });
   });
 withConfig(groundAdapters.command('verify'))
@@ -482,6 +534,12 @@ withConfig(groundRunner.command('plan'))
     print(plan, options.json, renderGroundingRunnerPlan(plan), {
       command: 'ground runner plan',
       config,
+      agentOverride: {
+        disposition: 'stop-for-human',
+        instruction: 'Stop and give this runner plan to an authorized human. The agent must not choose, approve or configure the executable, arguments or environment allowlist.',
+        expectedStateChange: 'An authorized human reviews and configures one approved shell-disabled runner with the required manifest and observation placeholders.',
+        retryAllowed: false,
+      },
     });
   });
 withConfig(ground.command('prepare'))
@@ -575,6 +633,14 @@ withConfig(repair.command('plan').description('Show exact missing joins with the
       sourceDigest: plan.sourceDigest,
       config: store.config,
       diagnostics: plan.gaps.flatMap((gap) => gap.diagnostics),
+      ...(plan.status === 'source-repair-required' ? {
+        agentOverride: {
+          disposition: 'inspect' as const,
+          instruction: 'For each gap, inspect the cited canonical evidence and use agentHints only to find nearby candidate syntax. Implement the smallest general typed extractor/join or reviewed-config repair. Do not edit the application to make a test pass and do not rerun discovery until evidence or compiler support changed.',
+          expectedStateChange: 'At least one missing proof stage is removed by new typed source evidence, reviewed configuration or compiler support; discovery is rerun only after that change.',
+          ifStateUnchanged: 'Do not rerun repair plan or discovery unchanged. Report the exact missingStage, operationId and unsupported source pattern as NO_PROGRESS.',
+        },
+      } : {}),
     });
   });
 
@@ -587,11 +653,15 @@ withConfig(program.command('explain <kind> <id>').description('Explain an eviden
 program.parseAsync(process.argv).catch((error: unknown) => {
   const normalized = normalizeFlowctlError(error);
   if (process.argv.includes('--json')) {
+    const resumeCommand = agentResumeCommand();
     console.error(JSON.stringify(failureEnvelope({
       command: activeCommandLabel(),
       code: normalized.code,
       message: normalized.message,
       details: normalized.details,
+      target: commandLineTarget(),
+      nextActions: failureRecoveryActions(normalized.code, normalized.message, resumeCommand),
+      resumeCommand,
     }), null, 2));
   } else {
     console.error(`flowctl: ${normalized.message}`);
@@ -652,6 +722,7 @@ interface PrintContext {
   };
   nextActions?: ProjectGuide['nextActions'];
   diagnostics?: Diagnostic[];
+  agentOverride?: AgentDirectiveOverride;
 }
 
 function withConfig(command: Command): Command {
@@ -754,6 +825,8 @@ function print(value: unknown, json = false, human?: string, context: PrintConte
       ...(context.target ? { target: context.target } : {}),
       ...(context.nextActions ? { nextActions: context.nextActions } : {}),
       ...(context.diagnostics ? { diagnostics: context.diagnostics } : {}),
+      resumeCommand: agentResumeCommand(context),
+      ...(context.agentOverride ? { agentOverride: context.agentOverride } : {}),
     }), null, 2));
     return;
   }
@@ -801,8 +874,77 @@ function activeCommandLabel(): string {
   const values = program.args.filter((value) => !value.startsWith('-'));
   const top = values[0];
   if (!top) return 'flowctl';
-  const grouped = new Set(['agent', 'graph', 'flows', 'runs', 'packet', 'review', 'data', 'ground', 'bdd']);
+  const grouped = new Set(['agent', 'graph', 'flows', 'runs', 'packet', 'review', 'data', 'ground', 'bdd', 'repair']);
   return grouped.has(top) && values[1] ? `${top} ${values[1]}` : top;
+}
+
+function agentResumeCommand(context: PrintContext = {}): string {
+  const configPath = context.config?.configPath ?? commandLineOption('--config', '-c') ?? 'flowctl.config.yaml';
+  const target = context.target ?? commandLineTarget();
+  return [
+    'flowctl agent guide',
+    target.variantId ? `--variant ${shellQuote(target.variantId)}` : '',
+    target.environment ? `--env ${shellQuote(target.environment)}` : '',
+    `--config ${shellQuote(configPath)}`,
+    '--json',
+  ].filter(Boolean).join(' ');
+}
+
+function commandLineTarget(): NonNullable<PrintContext['target']> {
+  const variantId = commandLineOption('--variant');
+  const familyId = commandLineOption('--flow');
+  const environment = commandLineOption('--env');
+  return {
+    ...(familyId ? { familyId } : {}),
+    ...(variantId ? { variantId } : {}),
+    ...(environment ? { environment } : {}),
+  };
+}
+
+function commandLineOption(...names: string[]): string | undefined {
+  for (let index = 0; index < process.argv.length; index += 1) {
+    if (!names.includes(process.argv[index]!)) continue;
+    const value = process.argv[index + 1];
+    if (value && !value.startsWith('-')) return value;
+  }
+  return undefined;
+}
+
+function failureRecoveryActions(code: string, message: string, resumeCommand: string): GuideAction[] {
+  if (code === 'SECURITY_POLICY_DENIED' || code === 'REVIEW_REQUIRED' || code === 'SCHEMA_INVALID') return [];
+  if (code === 'NOT_FOUND') {
+    if (!/flow family|variant/i.test(message)) return [];
+    const configPath = commandLineOption('--config', '-c') ?? 'flowctl.config.yaml';
+    return [{
+      id: 'inspect-flow-catalog',
+      kind: 'inspect',
+      executor: 'agent',
+      title: 'Inspect current flow identifiers',
+      reason: 'The requested family or variant does not exist in the current source/config model; select only an ID returned by the current catalog.',
+      command: `flowctl flows list --config ${shellQuote(configPath)}`,
+      blocking: true,
+    }];
+  }
+  if (code === 'INVALID_INPUT') {
+    return [{
+      id: 'inspect-command-help',
+      kind: 'inspect',
+      executor: 'agent',
+      title: 'Inspect the exact command contract',
+      reason: 'The failed invocation contains an invalid or unsupported argument; only command help can safely define the accepted syntax.',
+      command: `flowctl ${activeCommandLabel()} --help`,
+      blocking: true,
+    }];
+  }
+  return [{
+    id: 'recover-with-guide',
+    kind: 'inspect',
+    executor: 'agent',
+    title: 'Recompute state-aware recovery guidance',
+    reason: `The failed command returned ${code}; the lifecycle guide must choose recovery from current artifact and target state.`,
+    command: resumeCommand,
+    blocking: true,
+  }];
 }
 
 async function firstExisting(candidates: string[]): Promise<string> {
