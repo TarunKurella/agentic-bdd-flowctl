@@ -32,6 +32,8 @@ export interface ArtifactMeta {
   configDigest: string;
   inputDigests: Record<string, string>;
   contentDigest: string;
+  /** Consistency digest over the complete artifact envelope except this field. */
+  envelopeDigest?: string;
   status: 'raw' | 'proposed' | 'validated' | 'reviewed' | 'generated' | 'grounded' | 'verified' | 'stale';
   unresolved: Diagnostic[];
 }
@@ -50,6 +52,7 @@ export type EvidenceNodeKind =
   | 'field'
   | 'handler'
   | 'predicate'
+  | 'request-payload'
   | 'http-client-operation'
   | 'java-endpoint'
   | 'dto-field'
@@ -128,6 +131,7 @@ export interface ReactRouteFact {
   id: string;
   path: string;
   component?: string;
+  componentFile?: string;
   sourceRef: SourceRef;
 }
 
@@ -136,8 +140,43 @@ export interface ReactHandlerFact {
   name: string;
   file: string;
   calls: string[];
+  parameterNames?: string[];
+  callSites?: ReactCallSiteFact[];
   httpOperationIds: string[];
   navigationIds: string[];
+  normalCompletion?: 'exact' | 'conditional';
+  normalCompletionReason?: string;
+  sourceRef: SourceRef;
+}
+
+export type RequestPayloadCertainty = 'exact' | 'partial' | 'unknown';
+
+export interface RequestPayloadFieldFact {
+  name: string;
+  value?: ValueRef;
+  /**
+   * Canonical source-symbol identity for a path-valued payload property. This is
+   * intentionally stronger than matching the displayed path text.
+   */
+  valueSourceIdentity?: string;
+  sourceRef: SourceRef;
+}
+
+export interface RequestPayloadShape {
+  certainty: RequestPayloadCertainty;
+  fields: RequestPayloadFieldFact[];
+  expression?: string;
+  referenceName?: string;
+  reason?: string;
+  sourceRefs: SourceRef[];
+}
+
+export interface ReactCallSiteFact {
+  calleeSymbol: string;
+  targetSymbol?: string;
+  targetFile?: string;
+  guard?: Predicate;
+  argumentPayloads: RequestPayloadShape[];
   sourceRef: SourceRef;
 }
 
@@ -149,9 +188,26 @@ export interface ReactActionFact {
   accessibleName?: string;
   handlerName?: string;
   handlerId?: string;
+  handlerResolution?: 'exact' | 'conditional';
+  handlerExpression?: string;
+  navigationIds?: string[];
   visibleWhen: Predicate[];
   enabledWhen: Predicate[];
   sourceRef: SourceRef;
+}
+
+export interface ReactFieldOptionFact {
+  value: string | number | boolean;
+  label?: string;
+  sourceRef: SourceRef;
+}
+
+export interface ReactFieldOptionSource {
+  status: 'static' | 'partial' | 'runtime' | 'unknown';
+  options: ReactFieldOptionFact[];
+  expression?: string;
+  reason?: string;
+  sourceRefs: SourceRef[];
 }
 
 export interface ReactFieldFact {
@@ -160,9 +216,21 @@ export interface ReactFieldFact {
   dataPath: string;
   label?: string;
   controlKind: string;
+  inputMode?: 'editable' | 'read-only' | 'conditional';
+  optionSource?: ReactFieldOptionSource;
+  valueBinding?: {
+    path: string;
+    writable: boolean;
+    valueType?: 'string' | 'number' | 'integer' | 'boolean' | 'unknown';
+    /** Canonical source-symbol identity for the controlled value expression. */
+    sourceIdentity?: string;
+    sourceRef: SourceRef;
+  };
   visibleWhen: Predicate[];
   requiredWhen: Predicate[];
   constraints: InputConstraint[];
+  backendConstraintsByOperationId?: Record<string, InputConstraint[]>;
+  backendConstraintsByRequestContractId?: Record<string, InputConstraint[]>;
   sourceRef: SourceRef;
 }
 
@@ -172,6 +240,8 @@ export interface HttpOperationFact {
   pathTemplate: string;
   callerSymbol?: string;
   requestExpression?: string;
+  payloadShape?: RequestPayloadShape;
+  guard?: Predicate;
   sourceRef: SourceRef;
 }
 
@@ -179,7 +249,13 @@ export interface NavigationFact {
   id: string;
   fromPageId?: string;
   target: string;
+  targetStatus?: 'exact' | 'conditional';
+  targetExpression?: string;
+  trigger?: 'imperative' | 'declarative';
   guard: Predicate;
+  successAfterCallSymbol?: string;
+  successAfterCallFile?: string;
+  continuationStatus: 'exact' | 'conditional';
   sourceRef: SourceRef;
 }
 
@@ -190,6 +266,13 @@ export interface PermissionFact {
   sourceRef: SourceRef;
 }
 
+export interface JavaAuthorizationFact {
+  status: 'anonymous' | 'exact' | 'conditional';
+  sourceExpression?: string;
+  reason?: string;
+  sourceRefs: SourceRef[];
+}
+
 export interface JavaEndpointFact {
   id: string;
   method: string;
@@ -198,6 +281,8 @@ export interface JavaEndpointFact {
   handler: string;
   requestType?: string;
   responseType?: string;
+  authorization: JavaAuthorizationFact;
+  domainGuard: Predicate;
   permissionIds: string[];
   validationIds: string[];
   terminalEffectIds: string[];
@@ -207,8 +292,9 @@ export interface JavaEndpointFact {
 export interface InputConstraint {
   id: string;
   fieldPath: string;
-  kind: 'required' | 'min' | 'max' | 'size' | 'pattern' | 'enum' | 'opaque';
+  kind: 'required' | 'min' | 'max' | 'size' | 'pattern' | 'format' | 'enum' | 'type' | 'opaque';
   value?: string | number | boolean | string[];
+  domain?: 'length' | 'numeric' | 'format' | 'value-set' | 'type' | 'unknown';
   message?: string;
   sourceRef: SourceRef;
 }
@@ -245,7 +331,31 @@ export interface ExtractionBundle {
   wikiConcepts: WikiConcept[];
   graphifyNodes: EvidenceNode[];
   graphifyEdges: EvidenceEdge[];
+  requestContracts?: RequestPayloadContractFact[];
   diagnostics: Diagnostic[];
+}
+
+export interface RequestPayloadContractFact {
+  id: string;
+  actionId: string;
+  handlerId: string;
+  handlerPath: string[];
+  httpOperationId: string;
+  endpointId: string;
+  payloadShape: RequestPayloadShape;
+  dispatchGuard: Predicate;
+  requiredFields: string[];
+  providedFields: string[];
+  literalBindings: Record<string, string | number | boolean | null>;
+  /** Exact backend request-field to writable UI-field provenance. */
+  uiFieldBindings: Record<string, string>;
+  missingRequiredFields: string[];
+  unprovenFieldValues: string[];
+  invalidFieldValues: string[];
+  validationIds: string[];
+  status: 'fields-present' | 'required-fields-missing' | 'required-fields-invalid' | 'review-required';
+  evidenceRefs: string[];
+  sourceRefs: SourceRef[];
 }
 
 export interface PageSeed {
@@ -253,6 +363,8 @@ export interface PageSeed {
   name: string;
   file: string;
   routeIds: string[];
+  completeness?: 'exact' | 'conditional';
+  unresolvedChildComponentRefs?: SourceRef[];
   sourceRef: SourceRef;
 }
 
@@ -268,9 +380,12 @@ export interface OperationCatalogEntry {
   businessCommand: {
     machineName: string;
     label: string;
+    aliases?: string[];
+    familyHint?: string;
     origin: 'deterministic' | 'wiki' | 'semantic-proposed' | 'human-reviewed';
   };
   inclusion: 'included' | 'excluded' | 'review-required';
+  requestContractIds?: string[];
   evidenceRefs: string[];
 }
 
@@ -285,6 +400,8 @@ export interface PageContract {
   fields: ReactFieldFact[];
   actions: ReactActionFact[];
   entryConditions: Predicate[];
+  completeness: 'exact' | 'conditional';
+  unresolvedChildComponentRefs: SourceRef[];
   evidenceRefs: string[];
 }
 
@@ -332,6 +449,19 @@ export interface BehaviorEdge {
   effects: Effect[];
   outcome: 'neutral' | 'success' | 'error' | 'cancel';
   evidenceRefs: string[];
+  requestPayloadContracts?: Array<{
+    id: string;
+    status: RequestPayloadContractFact['status'];
+    certainty: RequestPayloadCertainty;
+    dispatchGuard: Predicate;
+    providedFields: string[];
+    literalBindings?: Record<string, string | number | boolean | null>;
+    uiFieldBindings?: Record<string, string>;
+    requiredFields: string[];
+    missingRequiredFields: string[];
+    unprovenFieldValues?: string[];
+    invalidFieldValues?: string[];
+  }>;
 }
 
 export interface BehaviorGraph {
@@ -368,8 +498,45 @@ export interface PathWitness {
   evidenceRefs: string[];
 }
 
+export type PathSearchTruncationReason = 'max-path-depth' | 'max-state-visits';
+
+export interface PathSearchTruncationDetail {
+  reason: PathSearchTruncationReason;
+  familyId: string;
+  /** The rejected state for depth pruning, or attempted target state for visit pruning. */
+  nodeId: string;
+  /** Present when a transition was rejected by the state-visit bound. */
+  edgeId?: string;
+  limit: number;
+  minimumObserved: number;
+  maximumObserved: number;
+  count: number;
+  /** Lexicographically smallest rejected path represented by this aggregate. */
+  sampleNodePath: string[];
+  sampleEdgePath: string[];
+}
+
+export interface PathSearchReport {
+  bounds: {
+    maxPathDepth: number;
+    maxStateVisits: number;
+  };
+  enqueuedStates: number;
+  dequeuedStates: number;
+  truncation: {
+    occurred: boolean;
+    counts: {
+      maxPathDepth: number;
+      maxStateVisits: number;
+    };
+    details: PathSearchTruncationDetail[];
+  };
+}
+
 export interface PathWitnesses {
   witnesses: PathWitness[];
+  /** Optional for compatibility with path-witness artifacts written before v0.2. */
+  search?: PathSearchReport;
 }
 
 export interface FlowVariant {
@@ -384,12 +551,28 @@ export interface FlowVariant {
   actionSequence: string[];
   operationIds: string[];
   dataRequirementIds: string[];
+  /**
+   * Source path predicates that must be established by the selected actor,
+   * rather than by typing into a field on the journey.
+   */
+  actorAttributeAssignments?: Record<string, string | number | boolean | null>;
+  /** Entity/resource state that a selected application fixture must establish. */
+  entityPrerequisites?: Array<{
+    predicatePath: string;
+    expectedValue: string | number | boolean | null;
+    pageId: string;
+    fieldId: string;
+    fieldPath: string;
+  }>;
+  /** Predicate assignments for which the compiler found no controllable UI or actor input. */
+  unboundPathAssignments?: string[];
   feasibility: 'satisfiable' | 'conditional';
   evidenceRefs: string[];
 }
 
 export interface FlowVariants {
   variants: FlowVariant[];
+  rejectedCandidates?: Diagnostic[];
 }
 
 export type DataClassification =
@@ -399,14 +582,22 @@ export type DataClassification =
   | 'runtime-option'
   | 'existing-entity'
   | 'authenticated-identity'
+  | 'actor-attribute'
   | 'secret-reference'
   | 'external-manual';
 
 export interface DataRequirement {
   id: string;
   variantId: string;
+  pageId?: string;
+  fieldId?: string;
+  actorRequirementId?: string;
   fieldPath: string;
   classification: DataClassification;
+  /** Predicate value the resolved actor/data fixture must establish; not a generated test value. */
+  expectedValue?: string | number | boolean | null;
+  expectedAttributes?: Record<string, string | number | boolean | null>;
+  representativeValue?: string | number | boolean | null;
   constraints: InputConstraint[];
   resolutionStrategies: string[];
   status: 'unresolved' | 'generated' | 'bound' | 'verified' | 'blocked';
@@ -415,20 +606,43 @@ export interface DataRequirement {
 
 export interface RuntimeBinding {
   id: string;
-  actionId: string;
-  screenId: string;
+  witnessId: string;
+  sequence: number;
+  groundingRunId: string;
+  groundingManifestDigest: string;
+  observationProducer: 'flowctl-playwright-adapter-runner';
+  targetKind: 'actor-session' | 'screen-state' | 'field' | 'action';
+  actorRequirementIds?: string[];
+  actorRequirementsDigest?: string;
+  identityBindingDigests?: Record<string, string>;
+  actorDataRequirementIds?: string[];
+  actorDataBindingDigests?: Record<string, string>;
+  actorDataResolutionDigests?: Record<string, string>;
+  screenStatePhase?: 'entry' | 'intermediate' | 'success';
+  actionId?: string;
+  fieldId?: string;
+  dataRequirementId?: string;
+  dataRequirementDigest?: string;
+  valueBindingDigest?: string;
+  valueAvailability?: 'representative-value' | 'application-value' | 'secret-reference';
+  valueResolutionDigest?: string;
+  screenId?: string;
   environment: string;
-  locator: {
+  runtimeConfigDigest: string;
+  baseUrl: string;
+  locator?: {
     strategy: 'role-and-name' | 'label' | 'test-id' | 'scoped-text' | 'reviewed-css';
     role?: string;
     name?: string;
     value?: string;
   };
   componentAdapter: string;
-  unique: boolean;
-  actionable: boolean;
+  adapterManifestDigest: string;
+  unique?: boolean;
+  actionable?: boolean;
   observedOperationId?: string;
   observedNextStateId?: string;
+  observedUrl?: string;
   evidenceRefs: string[];
 }
 
@@ -444,6 +658,19 @@ export interface CoverageReport {
     maxStateVisits: number;
   };
   counts: Record<string, number>;
+  operationCoverage: Array<{
+    operationId: string;
+    inclusion: OperationCatalogEntry['inclusion'];
+    status: 'covered' | 'conditional' | 'uncovered';
+    familyId?: string;
+    witnessIds: string[];
+    variantIds: string[];
+    missingStage?: 'frontend-client-join' | 'action-operation-join' | 'success-continuation' | 'flow-family' | 'entry-success-witness' | 'behavior-variant';
+    /** Present when this operation's family search hit a configured traversal bound. */
+    searchTruncationReasons?: PathSearchTruncationReason[];
+  }>;
+  /** Optional so coverage artifacts produced before bounded-search reporting remain readable. */
+  search?: PathSearchReport;
   unresolved: Diagnostic[];
   claims: string[];
 }

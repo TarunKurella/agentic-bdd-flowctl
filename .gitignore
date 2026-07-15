@@ -9,7 +9,9 @@ dist/
 **/.flowctl/artifacts/
 **/.flowctl/generated/
 
-# Environment-specific bindings and secrets
+# Project-specific application data and secrets
+**/.flowctl/application-data.local.yaml
+# Migration safety only: current Flowctl does not read legacy per-environment files.
 **/.flowctl/data-bindings/*.local.yaml
 .env
 .env.*

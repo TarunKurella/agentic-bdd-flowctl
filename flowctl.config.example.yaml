@@ -19,10 +19,14 @@ sources:
     - "**/build/**"
 
 graphify:
+  # v0.2 imports this as auxiliary evidence only. It does not narrow source
+  # scanning, create framework joins, or authorize behavior transitions.
   graph: graphify-out/graph.json
   required: false
 
 wiki:
+  # v0.2 imports headings/aliases for glossary and readable-label enrichment.
+  # Wiki aliases do not connect React, HTTP, and Java symbols.
   paths:
     - llm-wiki
   required: false
@@ -35,12 +39,33 @@ analysis:
     - PUT
     - PATCH
     - DELETE
+  # Add only presentation/container components whose reviewed contract proves
+  # they do not add, suppress, or transform user interactions.
+  transparentComponents: []
   maxPathDepth: 40
   maxStateVisits: 2
 
 output:
   directory: .flowctl
 
+data:
+  # One application-scoped, ignored file keyed by stable requirement IDs. It is
+  # not selected by runtime.environment. Humans put approved application values
+  # here (for example valid UAT IDs/product codes/eligible actors/entities).
+  applicationDataFile: .flowctl/application-data.local.yaml
+
 runtime:
+  # v0.2 supports one runtime target per config. Every --env used for grounding
+  # or execution must equal this name; use another config for another target.
   baseUrl: http://localhost:3000
   environment: local
+  adapterManifest: runtime/adapters.json
+  # Configure only an organization-approved Playwright runner. Flowctl launches
+  # this argv directly with shell disabled.
+  # runner:
+  #   command: corporate-playwright-grounding-runner
+  #   args: ["--manifest", "{manifest}", "--observation", "{observation}"]
+  #   timeoutMs: 900000
+  #   # Process configuration only; application/UAT values belong in
+  #   # .flowctl/application-data.local.yaml, not runner environment variables.
+  #   envAllowlist: []

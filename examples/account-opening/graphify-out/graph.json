@@ -1,10 +1,10 @@
 {
   "nodes": [
     {
-      "id": "react-review",
-      "name": "ReviewApplicationPage",
+      "id": "react-joint-applicant",
+      "name": "JointApplicantPage",
       "kind": "component",
-      "file": "frontend/src/pages/ReviewApplicationPage.tsx",
+      "file": "frontend/src/pages/JointApplicantPage.tsx",
       "line": 6,
       "origin": "EXTRACTED"
     },

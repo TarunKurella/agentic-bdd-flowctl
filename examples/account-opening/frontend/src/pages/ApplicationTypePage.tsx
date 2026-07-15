@@ -10,7 +10,7 @@ export function ApplicationTypePage() {
   }
 
   function continueJoint() {
-    navigate('/applications/joint/primary');
+    navigate('/applications/joint');
   }
 
   return (

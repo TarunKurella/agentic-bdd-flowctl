@@ -32,8 +32,9 @@ describe('account-opening golden fixture', () => {
   it('links UI, HTTP and Java terminal evidence', async () => {
     const evidence = await store.read<EvidenceGraph>('evidence');
     const operations = await store.read<OperationCatalog>('operations');
-    expect(evidence.data.nodes.some((node) => node.kind === 'control' && node.label === 'Submit application')).toBe(true);
+    expect(evidence.data.nodes.some((node) => node.kind === 'control' && /^Submit .*application$/i.test(node.label))).toBe(true);
     expect(evidence.data.edges.some((edge) => edge.kind === 'handled-by')).toBe(true);
+    expect(evidence.data.edges.every((edge) => edge.sourceRefs.length > 0)).toBe(true);
     expect(operations.data.operations).toHaveLength(1);
     expect(operations.data.operations[0]).toMatchObject({
       method: 'POST',
@@ -46,10 +47,19 @@ describe('account-opening golden fixture', () => {
   it('retains page fields, backend validation and actor authority', async () => {
     const pages = await store.read<PageContracts>('pages');
     const actors = await store.read<ActorRequirements>('actors');
+    const evidence = await store.read<EvidenceGraph>('evidence');
+    const operations = await store.read<OperationCatalog>('operations');
     const productFields = pages.data.pages.flatMap((page) => page.fields).filter((field) => field.dataPath === 'productCode');
     expect(productFields.some((field) => field.constraints.some((constraint) => constraint.kind === 'min' && constraint.value === 3))).toBe(true);
-    expect(productFields.some((field) => field.constraints.some((constraint) => constraint.kind === 'max' && constraint.value === 12))).toBe(true);
+    expect(productFields.some((field) => field.constraints.some((constraint) => constraint.kind === 'max' && constraint.value === 12))).toBe(false);
+    expect(evidence.data.nodes.some((node) => (
+      node.kind === 'validation'
+      && node.attributes.fieldPath === 'ApplicationRequest.productCode'
+      && node.attributes.kind === 'max'
+      && node.attributes.value === 12
+    ))).toBe(true);
     expect(actors.data.actors[0]?.authoritiesAll).toContain('APPLICATION_CREATE');
+    expect(operations.data.operations[0]?.actorRequirementIds).toEqual([actors.data.actors[0]?.id]);
   });
 
   it('discovers two distinct successful variants with witnesses', async () => {
@@ -84,13 +94,14 @@ describe('account-opening golden fixture', () => {
     const text = await fs.readFile(journey, 'utf8');
     expect(text).toContain('@variant:application.submit.joint');
     expect(text).toContain('@variant:application.submit.personal');
-    expect(text).toContain('Then "Submit Application" should succeed');
-    const pageFeature = generated.find((file) => file.includes('page-contracts') && file.endsWith('.feature'))!;
+    expect(text).toMatch(/Then "Submit Application" with operation IDs ".+" should succeed/);
+    const pageFeature = generated.find((file) => file.includes('page-contracts') && file.endsWith('.feature.txt'))!;
     expect(await fs.readFile(pageFeature, 'utf8')).toContain('active validation contract');
-    const jointPageFeature = generated.find((file) => file.includes('joint-applicant-page') && file.endsWith('.feature'))!;
+    const jointPageFeature = generated.find((file) => file.includes('joint-applicant-page') && file.endsWith('.feature.txt'))!;
     const jointPageText = await fs.readFile(jointPageFeature, 'utf8');
     expect(jointPageText.match(/Enforce required validation for Joint applicant/g)).toHaveLength(1);
     expect(jointPageText.match(/Enforce min validation for Product code/g)).toHaveLength(1);
+    expect(jointPageText).not.toMatch(/violates constraint ID .* with /);
     const steps = generated.find((file) => file.endsWith('flowctl.steps.generated.ts'))!;
     const stepText = await fs.readFile(steps, 'utf8');
     expect(stepText).toContain('registerFlowctlSteps');
@@ -100,16 +111,12 @@ describe('account-opening golden fixture', () => {
     expect(plan.steps.every((step) => step.witnessId && step.nodePath.length > 0)).toBe(true);
   });
 
-  it('creates a bounded runtime grounding manifest', async () => {
-    const prepared = await prepareGrounding(store, 'application.submit.joint', 'uat');
-    const manifest = JSON.parse(await fs.readFile(prepared.path, 'utf8')) as { variantId: string; rules: string[]; steps: unknown[] };
-    expect(manifest.variantId).toBe('application.submit.joint');
-    expect(manifest.rules).toContain('Do not persist snapshot-local references.');
-    expect(manifest.steps.length).toBeGreaterThan(0);
+  it('refuses runtime grounding until required application data is verified', async () => {
+    await expect(prepareGrounding(store, 'application.submit.joint', 'local')).rejects.toThrow(/required application data is not verified/i);
   });
 
-  it('refuses executable status while UAT data and actions are unbound', async () => {
-    const { plan } = await compileExecutionPlan(store, 'application.submit.joint', 'uat');
+  it('refuses executable status while application data and actions are unbound', async () => {
+    const { plan } = await compileExecutionPlan(store, 'application.submit.joint', 'local');
     expect(plan.readiness).toBe('blocked-data');
     expect(plan.data.missing.some((item) => item.classification === 'existing-entity')).toBe(true);
     expect(plan.missingActionBindings.length).toBeGreaterThan(0);
@@ -127,6 +134,7 @@ describe('account-opening golden fixture', () => {
     const packet = await inspectPacket(store, 'packet.operation-semantics.v1');
     await fs.writeFile(packet.outputPath, JSON.stringify({
       packetId: packet.packetId,
+      packetDigest: packet.packetDigest,
       decisions: [{
         operationId: packet.allowedOperationIds[0],
         label: 'Submit application',

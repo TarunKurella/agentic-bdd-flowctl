@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import fg from 'fast-glob';
 import type { FlowctlConfig } from '../core/config.js';
+import { safeRealDescendantPath } from '../core/paths.js';
 import { stableId } from '../core/stable.js';
 import type { Diagnostic, WikiConcept } from '../ir/model.js';
 
@@ -9,9 +10,10 @@ export async function importWiki(config: FlowctlConfig): Promise<{ concepts: Wik
   const concepts: WikiConcept[] = [];
   const diagnostics: Diagnostic[] = [];
   for (const configuredPath of config.wiki.paths) {
-    const absolute = path.resolve(config.projectRoot, configuredPath);
+    const absolute = await safeRealDescendantPath(config.projectRoot, configuredPath, 'Wiki path');
     const files = await fg(['**/*.md', '**/*.txt'], { cwd: absolute, absolute: true, onlyFiles: true }).catch(() => []);
     for (const file of files.sort()) {
+      await safeRealDescendantPath(config.projectRoot, path.relative(config.projectRoot, file), 'Wiki file');
       const text = await fs.readFile(file, 'utf8');
       const lines = text.split(/\r?\n/);
       lines.forEach((line, index) => {
@@ -35,6 +37,9 @@ export async function importWiki(config: FlowctlConfig): Promise<{ concepts: Wik
         message: `No LLM Wiki Markdown files found at ${configuredPath}.`,
       });
     }
+  }
+  if (config.wiki.required && (!config.wiki.paths.length || diagnostics.some((diagnostic) => diagnostic.code === 'WIKI_PATH_EMPTY'))) {
+    throw new Error('wiki.required is true, but one or more configured Wiki inputs contain no readable Markdown or text evidence.');
   }
   return { concepts, diagnostics };
 }

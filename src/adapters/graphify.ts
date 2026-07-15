@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { FlowctlConfig } from '../core/config.js';
+import { safeRealDescendantPath } from '../core/paths.js';
 import { stableId } from '../core/stable.js';
 import type { Diagnostic, EvidenceEdge, EvidenceEdgeKind, EvidenceNode, EvidenceNodeKind } from '../ir/model.js';
 
@@ -11,7 +12,7 @@ export interface GraphifyImport {
 }
 
 export async function importGraphify(config: FlowctlConfig): Promise<GraphifyImport> {
-  const graphPath = path.resolve(config.projectRoot, config.graphify.graph);
+  const graphPath = await safeRealDescendantPath(config.projectRoot, config.graphify.graph, 'Graphify graph');
   try {
     const raw = JSON.parse(await fs.readFile(graphPath, 'utf8')) as Record<string, unknown>;
     const rawNodes = arrayValue(raw.nodes ?? raw.vertices ?? raw.concepts);
@@ -24,7 +25,7 @@ export async function importGraphify(config: FlowctlConfig): Promise<GraphifyImp
       const canonicalKey = stringValue(node.qualified_name ?? node.qualifiedName ?? node.name ?? node.label, rawId);
       const id = stableId('graphify', canonicalKey);
       idMap.set(rawId, id);
-      const file = stringValue(node.file ?? node.path ?? node.source, config.graphify.graph);
+      const file = safeEvidenceFile(config, stringValue(node.file ?? node.path ?? node.source, config.graphify.graph));
       const line = numberValue(node.line ?? node.start_line ?? node.startLine, 1);
       return {
         id,
@@ -38,6 +39,7 @@ export async function importGraphify(config: FlowctlConfig): Promise<GraphifyImp
       } satisfies EvidenceNode;
     });
 
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
     const edges = rawEdges.flatMap((value, index) => {
       const edge = recordValue(value);
       const rawFrom = stringValue(edge.source ?? edge.from ?? edge.start, '');
@@ -47,6 +49,13 @@ export async function importGraphify(config: FlowctlConfig): Promise<GraphifyImp
       if (!from || !to) return [];
       const kind = mapEdgeKind(stringValue(edge.kind ?? edge.type ?? edge.relationship, 'references'));
       const origin = sourceOrigin(edge);
+      const edgeFile = safeEvidenceFile(config, stringValue(edge.file ?? edge.path ?? edge.sourceFile ?? edge.source_file, ''));
+      const sourceRefs = edgeFile
+        ? [{ file: edgeFile, line: numberValue(edge.line ?? edge.start_line ?? edge.startLine, 1) }]
+        : dedupeSourceRefs([
+          ...(nodeById.get(from)?.sourceRefs ?? []),
+          ...(nodeById.get(to)?.sourceRefs ?? []),
+        ]);
       return [{
         id: stableId('graphify-edge', `${from}:${kind}:${to}:${index}`),
         from,
@@ -54,7 +63,7 @@ export async function importGraphify(config: FlowctlConfig): Promise<GraphifyImp
         kind,
         origin,
         confidence: origin === 'graphify-extracted' ? 'exact' as const : 'semantic' as const,
-        sourceRefs: [],
+        sourceRefs,
       } satisfies EvidenceEdge];
     });
 
@@ -71,6 +80,20 @@ export async function importGraphify(config: FlowctlConfig): Promise<GraphifyImp
       }],
     };
   }
+}
+
+function safeEvidenceFile(config: FlowctlConfig, value: string): string {
+  if (!value) return '';
+  const relative = path.isAbsolute(value) ? path.relative(config.projectRoot, value) : value;
+  const normalized = relative.replace(/\\/g, '/');
+  if (normalized.includes('\0') || normalized.split('/').includes('..') || path.isAbsolute(normalized)) {
+    return config.graphify.graph.replace(/\\/g, '/');
+  }
+  return normalized.replace(/^\.\//, '');
+}
+
+function dedupeSourceRefs(values: EvidenceNode['sourceRefs']): EvidenceNode['sourceRefs'] {
+  return [...new Map(values.map((value) => [`${value.file}:${value.line}:${value.endLine ?? ''}:${value.symbol ?? ''}`, value])).values()];
 }
 
 function sourceOrigin(value: Record<string, unknown>): 'graphify-extracted' | 'graphify-inferred' {

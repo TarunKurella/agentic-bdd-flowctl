@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flowctl.dev/schemas/v1/cli-envelope.schema.json",
+  "title": "Flowctl CLI envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "command", "ok", "code", "nextActions", "diagnostics"],
+  "properties": {
+    "schemaVersion": { "const": "flowctl.cli.v1" },
+    "command": { "type": "string", "minLength": 1 },
+    "ok": { "type": "boolean" },
+    "code": { "type": "string", "minLength": 1 },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "configPath"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "configPath": { "type": "string", "minLength": 1 },
+        "sourceDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "familyId": { "type": "string" },
+        "variantId": { "type": "string" },
+        "environment": { "type": "string" }
+      }
+    },
+    "result": {},
+    "nextActions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
+    "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }
+  },
+  "$defs": {
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "executor", "title", "reason", "command", "blocking"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["compiler", "agent", "review", "data", "bdd", "runtime", "inspect"] },
+        "executor": { "enum": ["agent", "human"] },
+        "title": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "command": { "type": "string", "minLength": 1 },
+        "blocking": { "type": "boolean" },
+        "followUpCommands": { "type": "array", "items": { "type": "string" } },
+        "packet": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "path", "outputPath"],
+          "properties": {
+            "id": { "type": "string" },
+            "path": { "type": "string" },
+            "outputPath": { "type": "string" }
+          }
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "severity": { "enum": ["info", "warning", "error", "blocked"] },
+        "message": { "type": "string", "minLength": 1 },
+        "evidenceRefs": { "type": "array", "items": { "type": "string" } },
+        "scope": { "type": "string" }
+      }
+    }
+  }
+}

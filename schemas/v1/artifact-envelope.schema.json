@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.invalid/agentic-bdd/artifact-envelope-v1.schema.json",
+  "$id": "https://flowctl.dev/schemas/v1/artifact-envelope.schema.json",
   "title": "Flowctl artifact envelope",
   "type": "object",
   "required": ["meta", "data"],
@@ -16,6 +16,7 @@
         "configDigest",
         "inputDigests",
         "contentDigest",
+        "envelopeDigest",
         "status",
         "unresolved"
       ],
@@ -28,13 +29,15 @@
         "configDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
         "inputDigests": { "type": "object", "additionalProperties": { "type": "string" } },
         "contentDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "envelopeDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
         "status": {
           "enum": ["raw", "proposed", "validated", "reviewed", "generated", "grounded", "verified", "stale"]
         },
         "unresolved": { "type": "array" }
       },
       "additionalProperties": false
-    }
+    },
+    "data": {}
   },
   "additionalProperties": false
 }

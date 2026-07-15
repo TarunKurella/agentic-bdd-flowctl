@@ -1,41 +1,165 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.invalid/agentic-bdd/runtime-observation-v1.schema.json",
-  "title": "Playwright runtime grounding observation",
+  "$id": "https://flowctl.dev/schemas/v1/runtime-observation.schema.json",
+  "title": "Registered Playwright adapter grounding observation",
   "type": "object",
-  "required": ["runId", "environment", "observations"],
+  "required": ["runId", "manifestDigest", "adapterManifestDigest", "producer", "environment", "observations"],
   "properties": {
-    "runId": { "type": "string" },
-    "environment": { "type": "string" },
+    "runId": { "type": "string", "minLength": 1 },
+    "manifestDigest": { "type": "string", "minLength": 1 },
+    "adapterManifestDigest": { "type": "string", "minLength": 1 },
+    "producer": { "const": "flowctl-playwright-adapter-runner" },
+    "environment": { "type": "string", "minLength": 1 },
     "observations": {
       "type": "array",
+      "minItems": 1,
       "items": {
-        "type": "object",
-        "required": ["actionId", "screenId", "locator", "componentAdapter", "unique", "actionable", "evidenceRefs"],
-        "properties": {
-          "actionId": { "type": "string" },
-          "screenId": { "type": "string" },
-          "locator": {
-            "type": "object",
-            "required": ["strategy"],
-            "properties": {
-              "strategy": { "enum": ["role-and-name", "label", "test-id", "scoped-text", "reviewed-css"] },
-              "role": { "type": "string" },
-              "name": { "type": "string" },
-              "value": { "type": "string" }
-            },
-            "additionalProperties": false
-          },
-          "componentAdapter": { "type": "string" },
-          "unique": { "type": "boolean" },
-          "actionable": { "type": "boolean" },
-          "observedOperationId": { "type": "string" },
-          "observedNextStateId": { "type": "string" },
-          "evidenceRefs": { "type": "array", "items": { "type": "string" } }
-        },
-        "additionalProperties": false
+        "oneOf": [
+          { "$ref": "#/$defs/actorSessionObservation" },
+          { "$ref": "#/$defs/screenStateObservation" },
+          { "$ref": "#/$defs/fieldObservation" },
+          { "$ref": "#/$defs/actionObservation" }
+        ]
       }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "adapterProperties": {
+      "componentAdapter": { "type": "string", "minLength": 1 },
+      "evidenceRefs": { "type": "array", "items": { "type": "string" } }
+    },
+    "locator": {
+      "type": "object",
+      "required": ["strategy"],
+      "properties": {
+        "strategy": { "enum": ["role-and-name", "label", "test-id", "scoped-text", "reviewed-css"] },
+        "role": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "value": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "strategy": { "const": "role-and-name" } }, "required": ["strategy"] },
+          "then": { "required": ["role", "name"] }
+        },
+        {
+          "if": { "properties": { "strategy": { "enum": ["test-id", "scoped-text", "reviewed-css"] } }, "required": ["strategy"] },
+          "then": { "required": ["value"] }
+        },
+        {
+          "if": { "properties": { "strategy": { "const": "label" } }, "required": ["strategy"] },
+          "then": { "anyOf": [{ "required": ["name"] }, { "required": ["value"] }] }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "visibleProbe": {
+      "type": "object",
+      "required": ["matchCount", "visible"],
+      "properties": {
+        "matchCount": { "const": 1 },
+        "visible": { "const": true }
+      },
+      "additionalProperties": false
+    },
+    "actorSessionObservation": {
+      "type": "object",
+      "required": ["targetKind", "actorRequirementIds", "actorRequirementsDigest", "identityBindingDigests", "actorDataRequirementIds", "actorDataBindingDigests", "actorDataResolutionDigests", "componentAdapter", "probe"],
+      "properties": {
+        "targetKind": { "const": "actor-session" },
+        "actorRequirementIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "actorRequirementsDigest": { "type": "string", "minLength": 1 },
+        "identityBindingDigests": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string", "minLength": 1 } },
+        "actorDataRequirementIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "actorDataBindingDigests": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string", "minLength": 1 } },
+        "actorDataResolutionDigests": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string", "minLength": 1 } },
+        "componentAdapter": { "$ref": "#/$defs/adapterProperties/componentAdapter" },
+        "probe": {
+          "type": "object",
+          "required": ["sessionEstablished"],
+          "properties": { "sessionEstablished": { "const": true } },
+          "additionalProperties": false
+        },
+        "evidenceRefs": { "$ref": "#/$defs/adapterProperties/evidenceRefs" }
+      },
+      "additionalProperties": false
+    },
+    "screenStateObservation": {
+      "type": "object",
+      "required": ["targetKind", "screenId", "screenStatePhase", "locator", "componentAdapter", "unique", "probe"],
+      "properties": {
+        "targetKind": { "const": "screen-state" },
+        "screenId": { "type": "string", "minLength": 1 },
+        "screenStatePhase": { "enum": ["entry", "intermediate", "success"] },
+        "locator": { "$ref": "#/$defs/locator" },
+        "componentAdapter": { "$ref": "#/$defs/adapterProperties/componentAdapter" },
+        "unique": { "const": true },
+        "observedUrl": { "type": "string", "format": "uri" },
+        "probe": { "$ref": "#/$defs/visibleProbe" },
+        "evidenceRefs": { "$ref": "#/$defs/adapterProperties/evidenceRefs" }
+      },
+      "additionalProperties": false
+    },
+    "fieldObservation": {
+      "type": "object",
+      "required": ["targetKind", "screenId", "fieldId", "dataRequirementId", "dataRequirementDigest", "valueBindingDigest", "valueAvailability", "valueResolutionDigest", "locator", "componentAdapter", "unique", "actionable", "probe"],
+      "properties": {
+        "targetKind": { "const": "field" },
+        "screenId": { "type": "string", "minLength": 1 },
+        "fieldId": { "type": "string", "minLength": 1 },
+        "dataRequirementId": { "type": "string", "minLength": 1 },
+        "dataRequirementDigest": { "type": "string", "minLength": 1 },
+        "valueBindingDigest": { "type": "string", "minLength": 1 },
+        "valueAvailability": { "enum": ["representative-value", "application-value", "secret-reference"] },
+        "valueResolutionDigest": { "type": "string", "minLength": 1 },
+        "locator": { "$ref": "#/$defs/locator" },
+        "componentAdapter": { "$ref": "#/$defs/adapterProperties/componentAdapter" },
+        "unique": { "const": true },
+        "actionable": { "const": true },
+        "probe": {
+          "type": "object",
+          "required": ["matchCount", "visible", "enabled", "writable", "valueAvailable", "valueAccepted"],
+          "properties": {
+            "matchCount": { "const": 1 },
+            "visible": { "const": true },
+            "enabled": { "const": true },
+            "writable": { "const": true },
+            "valueAvailable": { "const": true },
+            "valueAccepted": { "const": true }
+          },
+          "additionalProperties": false
+        },
+        "evidenceRefs": { "$ref": "#/$defs/adapterProperties/evidenceRefs" }
+      },
+      "additionalProperties": false
+    },
+    "actionObservation": {
+      "type": "object",
+      "required": ["targetKind", "screenId", "actionId", "locator", "componentAdapter", "unique", "actionable", "probe"],
+      "properties": {
+        "targetKind": { "const": "action" },
+        "screenId": { "type": "string", "minLength": 1 },
+        "actionId": { "type": "string", "minLength": 1 },
+        "locator": { "$ref": "#/$defs/locator" },
+        "componentAdapter": { "$ref": "#/$defs/adapterProperties/componentAdapter" },
+        "unique": { "const": true },
+        "actionable": { "const": true },
+        "probe": {
+          "type": "object",
+          "required": ["matchCount", "visible", "enabled"],
+          "properties": {
+            "matchCount": { "const": 1 },
+            "visible": { "const": true },
+            "enabled": { "const": true }
+          },
+          "additionalProperties": false
+        },
+        "observedOperationId": { "type": "string" },
+        "observedNextStateId": { "type": "string" },
+        "evidenceRefs": { "$ref": "#/$defs/adapterProperties/evidenceRefs" }
+      },
+      "additionalProperties": false
+    }
+  }
 }

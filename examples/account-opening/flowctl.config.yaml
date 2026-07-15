@@ -32,12 +32,17 @@ analysis:
     - /applications/new
   includeHttpMethods:
     - POST
+  transparentComponents: []
   maxPathDepth: 30
   maxStateVisits: 2
 
 output:
   directory: .flowctl
 
+data:
+  applicationDataFile: .flowctl/application-data.local.yaml
+
 runtime:
   baseUrl: http://localhost:3000
   environment: local
+  adapterManifest: runtime/adapters.json

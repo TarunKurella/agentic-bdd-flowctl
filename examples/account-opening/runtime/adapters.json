@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "implementation": "runtime/flowctl-adapters.ts",
+  "adapters": [
+    {
+      "id": "approved-actor-session",
+      "targets": ["actor-session"]
+    },
+    {
+      "id": "visible-screen-state",
+      "targets": ["screen-state"]
+    },
+    {
+      "id": "native-action",
+      "targets": ["action"]
+    },
+    {
+      "id": "native-form-control",
+      "targets": ["field"],
+      "controlKinds": ["radio", "textbox", "CustomerSelect"]
+    }
+  ]
+}

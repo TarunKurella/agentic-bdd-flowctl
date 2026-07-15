@@ -1,8 +1,8 @@
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import type { FlowctlConfig } from '../core/config.js';
 import { ArtifactStore } from '../core/artifact-store.js';
+import { safeFileSegment } from '../core/paths.js';
 import { stableJson } from '../core/stable.js';
 import { snapshotSources } from '../adapters/source.js';
 import { extractReact } from '../adapters/react.js';
@@ -10,6 +10,7 @@ import { extractJava } from '../adapters/java.js';
 import { importGraphify } from '../adapters/graphify.js';
 import { importWiki } from '../adapters/wiki.js';
 import { applyApprovedOperationDecisions, createOperationPacket } from '../agent/packets.js';
+import { analyzeRequestPayloads } from '../contracts/request-payload.js';
 import type { ExtractionBundle, FlowVariants, OperationCatalog, PageContracts, RuntimeBindings } from '../ir/model.js';
 import {
   buildActorRequirements,
@@ -38,7 +39,7 @@ export async function analyze(config: FlowctlConfig, through: Stage = 'coverage'
   await store.initialize();
   const snapshot = await snapshotSources(config);
   const [graphify, wiki] = await Promise.all([importGraphify(config), importWiki(config)]);
-  const react = extractReact(snapshot.files);
+  const react = extractReact(snapshot.files, { transparentComponents: config.analysis.transparentComponents });
   const java = extractJava(snapshot.files);
   const bundle: ExtractionBundle = {
     sourceDigest: snapshot.digest,
@@ -59,6 +60,9 @@ export async function analyze(config: FlowctlConfig, through: Stage = 'coverage'
     graphifyEdges: graphify.edges,
     diagnostics: [...react.diagnostics, ...java.diagnostics, ...graphify.diagnostics, ...wiki.diagnostics],
   };
+  const requestPayloadAnalysis = analyzeRequestPayloads(bundle);
+  bundle.requestContracts = requestPayloadAnalysis.contracts;
+  bundle.diagnostics.push(...requestPayloadAnalysis.diagnostics);
   const completedStages: Stage[] = [];
   const files: string[] = [];
   const stopAfter = (stage: Stage) => STAGES.indexOf(through) <= STAGES.indexOf(stage);
@@ -72,18 +76,18 @@ export async function analyze(config: FlowctlConfig, through: Stage = 'coverage'
   completedStages.push('evidence');
   if (stopAfter('evidence')) return summarize();
 
-  operations = buildOperationCatalog(bundle);
+  operations = buildOperationCatalog(bundle, config);
   await applyApprovedOperationDecisions(store, operations);
+  const actors = buildActorRequirements(bundle, operations);
   const operationsEnvelope = store.createEnvelope({ artifactType: 'operation-catalog', producer: 'operations:discover', sourceDigest: snapshot.digest, inputDigests: { evidence: evidenceEnvelope.meta.contentDigest }, data: operations, status: operations.operations.some((operation) => operation.inclusion === 'review-required') ? 'proposed' : 'generated' });
   files.push(await store.write('operations', operationsEnvelope));
   await createOperationPacket(store, operations);
   completedStages.push('operations');
   if (stopAfter('operations')) return summarize();
 
-  const actors = buildActorRequirements(bundle, operations);
-  pages = buildPageContracts(bundle);
+  pages = buildPageContracts(bundle, operations);
   const actorsEnvelope = store.createEnvelope({ artifactType: 'actor-requirements', producer: 'actors:build', sourceDigest: snapshot.digest, inputDigests: { evidence: evidenceEnvelope.meta.contentDigest, operations: operationsEnvelope.meta.contentDigest }, data: actors });
-  const pagesEnvelope = store.createEnvelope({ artifactType: 'page-contracts', producer: 'pages:build', sourceDigest: snapshot.digest, inputDigests: { evidence: evidenceEnvelope.meta.contentDigest }, data: pages });
+  const pagesEnvelope = store.createEnvelope({ artifactType: 'page-contracts', producer: 'pages:build', sourceDigest: snapshot.digest, inputDigests: { evidence: evidenceEnvelope.meta.contentDigest, operations: operationsEnvelope.meta.contentDigest }, data: pages });
   files.push(await store.write('actors', actorsEnvelope), await store.write('pages', pagesEnvelope));
   completedStages.push('contracts');
   if (stopAfter('contracts')) return summarize();
@@ -95,7 +99,7 @@ export async function analyze(config: FlowctlConfig, through: Stage = 'coverage'
   if (stopAfter('behavior')) return summarize();
 
   const families = buildFlowFamilies(operations, actors, behavior);
-  const familiesEnvelope = store.createEnvelope({ artifactType: 'flow-families', producer: 'families:discover', sourceDigest: snapshot.digest, inputDigests: { behavior: behaviorEnvelope.meta.contentDigest }, data: families });
+  const familiesEnvelope = store.createEnvelope({ artifactType: 'flow-families', producer: 'families:discover', sourceDigest: snapshot.digest, inputDigests: { operations: operationsEnvelope.meta.contentDigest, actors: actorsEnvelope.meta.contentDigest, behavior: behaviorEnvelope.meta.contentDigest }, data: families });
   files.push(await store.write('families', familiesEnvelope));
   completedStages.push('families');
   if (stopAfter('families')) return summarize();
@@ -106,30 +110,34 @@ export async function analyze(config: FlowctlConfig, through: Stage = 'coverage'
   completedStages.push('witnesses');
   if (stopAfter('witnesses')) return summarize();
 
-  variants = reduceVariants(witnesses, families, behavior, pages);
+  variants = reduceVariants(witnesses, families, behavior, pages, actors);
   completedStages.push('variants');
   if (stopAfter('variants')) {
-    const envelope = store.createEnvelope({ artifactType: 'flow-variants', producer: 'variants:reduce', sourceDigest: snapshot.digest, inputDigests: { witnesses: witnessesEnvelope.meta.contentDigest }, data: variants });
+    const envelope = store.createEnvelope({ artifactType: 'flow-variants', producer: 'variants:reduce', sourceDigest: snapshot.digest, inputDigests: { witnesses: witnessesEnvelope.meta.contentDigest, families: familiesEnvelope.meta.contentDigest, behavior: behaviorEnvelope.meta.contentDigest, pages: pagesEnvelope.meta.contentDigest, actors: actorsEnvelope.meta.contentDigest }, data: variants });
     files.push(await store.write('variants', envelope));
     return summarize();
   }
 
-  const dataRequirements = buildDataRequirements(variants, pages, actors);
-  const variantsEnvelope = store.createEnvelope({ artifactType: 'flow-variants', producer: 'variants:reduce', sourceDigest: snapshot.digest, inputDigests: { witnesses: witnessesEnvelope.meta.contentDigest }, data: variants, status: variants.variants.some((variant) => variant.feasibility === 'conditional') ? 'proposed' : 'generated' });
+  const dataRequirements = buildDataRequirements(variants, pages, actors, { witnesses, behavior });
+  const variantsEnvelope = store.createEnvelope({ artifactType: 'flow-variants', producer: 'variants:reduce', sourceDigest: snapshot.digest, inputDigests: { witnesses: witnessesEnvelope.meta.contentDigest, families: familiesEnvelope.meta.contentDigest, behavior: behaviorEnvelope.meta.contentDigest, pages: pagesEnvelope.meta.contentDigest, actors: actorsEnvelope.meta.contentDigest }, data: variants, status: variants.variants.some((variant) => variant.feasibility === 'conditional') ? 'proposed' : 'generated' });
   files.push(await store.write('variants', variantsEnvelope));
   for (const variant of variants.variants) {
     const requirements = dataRequirements.filter((requirement) => requirement.variantId === variant.id);
-    const destination = path.join(store.dataRequirementsDirectory, `${variant.id}.yaml`);
-    await fs.writeFile(destination, stringifyYaml({
-      meta: {
-        artifactType: 'data-requirements',
-        schemaVersion: '1.0',
-        producer: 'data:plan',
-        sourceDigest: snapshot.digest,
-        configDigest: config.configDigest,
+    const destination = path.join(store.dataRequirementsDirectory, `${safeFileSegment(variant.id, 'Variant ID')}.yaml`);
+    const dataEnvelope = store.createEnvelope({
+      artifactType: 'data-requirements',
+      producer: 'data:plan',
+      sourceDigest: snapshot.digest,
+      inputDigests: {
+        variants: variantsEnvelope.meta.contentDigest,
+        witnesses: witnessesEnvelope.meta.contentDigest,
+        behavior: behaviorEnvelope.meta.contentDigest,
+        pages: pagesEnvelope.meta.contentDigest,
+        actors: actorsEnvelope.meta.contentDigest,
       },
       data: { variantId: variant.id, requirements },
-    }, { lineWidth: 0, sortMapEntries: true }), 'utf8');
+    });
+    await store.writeManagedFile(destination, stringifyYaml(dataEnvelope, { lineWidth: 0, sortMapEntries: true }));
     files.push(destination);
   }
   completedStages.push('data');
@@ -137,26 +145,47 @@ export async function analyze(config: FlowctlConfig, through: Stage = 'coverage'
 
   let runtime: RuntimeBindings = { bindings: [] };
   if (await store.exists('runtime')) {
-    const runtimeEnvelope = await store.read<RuntimeBindings>('runtime');
-    if (runtimeEnvelope.meta.sourceDigest === snapshot.digest) {
-      runtime = runtimeEnvelope.data;
-    } else {
+    try {
+      const runtimeEnvelope = await store.read<RuntimeBindings>('runtime');
+      if (runtimeEnvelope.meta.sourceDigest === snapshot.digest
+        && runtimeEnvelope.meta.configDigest === config.configDigest
+        && runtimeEnvelope.meta.status !== 'stale') {
+        runtime = runtimeEnvelope.data;
+      } else {
+        files.push(await store.write('runtime', store.createEnvelope({
+          artifactType: 'runtime-bindings',
+          producer: 'runtime:invalidate',
+          sourceDigest: snapshot.digest,
+          data: runtimeEnvelope.data,
+          status: 'stale',
+          unresolved: [{ code: 'RUNTIME_BINDINGS_STALE', severity: 'blocked', message: 'Source or configuration changed after runtime grounding; bindings must be revalidated.' }],
+        })));
+      }
+    } catch {
       files.push(await store.write('runtime', store.createEnvelope({
         artifactType: 'runtime-bindings',
-        producer: 'runtime:invalidate',
+        producer: 'runtime:upgrade-invalidate',
         sourceDigest: snapshot.digest,
-        data: runtimeEnvelope.data,
+        data: runtime,
         status: 'stale',
-        unresolved: [{ code: 'RUNTIME_BINDINGS_STALE', severity: 'blocked', message: 'Source changed after runtime grounding; bindings must be revalidated.' }],
+        unresolved: [{ code: 'RUNTIME_BINDINGS_UNREADABLE', severity: 'blocked', message: 'Existing runtime bindings use an unsupported or invalid artifact contract; bindings were discarded and must be grounded again.' }],
       })));
     }
   } else files.push(await store.write('runtime', store.createEnvelope({ artifactType: 'runtime-bindings', producer: 'runtime:initialize', sourceDigest: snapshot.digest, data: runtime })));
   const coverage = buildCoverage(bundle, operations, pages, actors, behavior, families, witnesses, variants, dataRequirements, runtime, config);
-  const coverageEnvelope = store.createEnvelope({ artifactType: 'coverage', producer: 'coverage:build', sourceDigest: snapshot.digest, inputDigests: { variants: variantsEnvelope.meta.contentDigest }, data: coverage, unresolved: coverage.unresolved });
+  const coverageEnvelope = store.createEnvelope({ artifactType: 'coverage', producer: 'coverage:build', sourceDigest: snapshot.digest, inputDigests: {
+    evidence: evidenceEnvelope.meta.contentDigest,
+    operations: operationsEnvelope.meta.contentDigest,
+    pages: pagesEnvelope.meta.contentDigest,
+    actors: actorsEnvelope.meta.contentDigest,
+    behavior: behaviorEnvelope.meta.contentDigest,
+    families: familiesEnvelope.meta.contentDigest,
+    witnesses: witnessesEnvelope.meta.contentDigest,
+    variants: variantsEnvelope.meta.contentDigest,
+  }, data: coverage, unresolved: coverage.unresolved });
   files.push(await store.write('coverage', coverageEnvelope));
   completedStages.push('coverage');
-  await fs.mkdir(path.join(config.outputRoot, 'runs'), { recursive: true });
-  await fs.writeFile(path.join(config.outputRoot, 'runs', 'latest.json'), stableJson({ sourceDigest: snapshot.digest, configDigest: config.configDigest, completedStages, files }), 'utf8');
+  await store.writeManagedFile(path.join(config.outputRoot, 'runs', 'latest.json'), stableJson({ sourceDigest: snapshot.digest, configDigest: config.configDigest, completedStages, files }));
   return summarize();
 
   function summarize(): AnalyzeResult {

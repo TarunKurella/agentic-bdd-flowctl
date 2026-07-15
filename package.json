@@ -1,6 +1,6 @@
 {
   "name": "agentic-bdd-flowctl",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A source-grounded compiler from React/Java evidence to happy-path BDD and Playwright execution manifests.",
   "private": true,
   "type": "module",

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flowctl.dev/schemas/v1/application-data.schema.json",
+  "title": "Flowctl project-specific application data",
+  "type": "object",
+  "required": ["version", "application", "bindings"],
+  "properties": {
+    "version": { "const": 1 },
+    "application": { "type": "string", "minLength": 1 },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/binding" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "confirmation": {
+      "type": "object",
+      "required": ["reviewer", "confirmedAt"],
+      "properties": {
+        "reviewer": { "type": "string", "minLength": 1 },
+        "confirmedAt": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": false
+    },
+    "binding": {
+      "$comment": "The canonical DataRequirement classification determines which branch is allowed: secret-reference and authenticated-identity require secretRef; every other external requirement requires value. Flowctl enforces that cross-artifact rule during confirm and verify because this standalone schema cannot see the requirement artifact.",
+      "type": "object",
+      "required": ["alias", "resolver", "verified"],
+      "properties": {
+        "alias": { "type": "string", "minLength": 1 },
+        "value": { "type": ["string", "number", "boolean"] },
+        "secretRef": { "type": "string", "minLength": 1 },
+        "resolver": { "type": "string", "minLength": 1 },
+        "requirementDigest": { "type": "string", "minLength": 1 },
+        "verified": { "type": "boolean" },
+        "confirmation": { "$ref": "#/$defs/confirmation" }
+      },
+      "oneOf": [
+        { "required": ["value"], "not": { "required": ["secretRef"] } },
+        { "required": ["secretRef"], "not": { "required": ["value"] } }
+      ],
+      "allOf": [
+        {
+          "if": { "properties": { "verified": { "const": true } }, "required": ["verified"] },
+          "then": { "required": ["confirmation", "requirementDigest"] },
+          "else": { "not": { "required": ["confirmation"] } }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}
