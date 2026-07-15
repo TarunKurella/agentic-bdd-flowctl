@@ -1,49 +1,94 @@
-# Agentic BDD Flowctl
+<div align="center">
 
-`flowctl` is a source-grounded compiler for discovering successful business journeys in an unfamiliar React/Java application and turning them into composable BDD plus lineage-bound plans that can become ready for a Playwright run.
+<h1>Agentic BDD Flowctl</h1>
 
-It occupies this boundary:
+<p><strong>Compile source code into provable business journeys, composable BDD, and Playwright-ready execution contracts.</strong></p>
 
-```text
-React + Java source ───────────┐
-Graphify auxiliary evidence ───┼─→ flowctl → Business Logic IR
-LLM Wiki glossary/labels ──────┘             ↓
-                                      happy-path variants
-                                             ↓
-                              data + actor requirements
-                                             ↓
-                              BDD + reusable step plans
-                                             ↓
-                                  Playwright grounding
-```
+<p>
+  <a href="https://github.com/TarunKurella/agentic-bdd-flowctl/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/TarunKurella/agentic-bdd-flowctl/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <img alt="Node.js 20+" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white">
+  <img alt="Version 0.2.0" src="https://img.shields.io/badge/version-0.2.0-6f42c1">
+</p>
 
-The current release focuses on flow discovery and happy-path BDD generation. It is deliberately a developer tool, not a browser-only QA agent and not yet a bug-finding engine.
+<p>
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#how-flow-discovery-works">How it works</a> ·
+  <a href="#business-logic-ir">Artifacts</a> ·
+  <a href="#end-to-end-workflow">Workflow</a> ·
+  <a href="docs/architecture.md">Architecture</a>
+</p>
 
-## Start with the guided CLI
+</div>
 
-From this cloned repository after `npm install`, the shortest useful workflow is:
+`flowctl` is a developer-facing, source-grounded compiler for unfamiliar React/Java applications. It discovers successful business journeys, proves how each UI action reaches a backend operation, separates materially different happy paths, and generates traceable BDD with stable reusable step contracts.
+
+> [!IMPORTANT]
+> Version 0.2 focuses on trustworthy flow discovery and happy-path generation. It is not a browser-only QA recorder, does not invent UAT data, and does not yet claim to find implementation bugs.
+
+## Why Flowctl?
+
+Asking an AI assistant to “open the app and generate tests” gives it one browser state and too little business context. Flowctl first compiles an inspectable model from source, then lets Playwright confirm controls and transitions without becoming the source of business meaning.
+
+| You need | Flowctl provides |
+| --- | --- |
+| End-to-end business flows | Source-to-operation proof across React routes, handlers, HTTP clients and Spring endpoints |
+| Multiple meaningful happy paths | Behavior-based variants instead of a Cartesian explosion of test data |
+| Maintainable BDD | Stable page, field, action, constraint and requirement IDs with reusable step delegates |
+| Safe agent automation | A state-aware CLI that returns the next permitted agent or human action |
+| Realistic UAT data | Explicit requests for approved identities, entities and product codes—never hallucinated values |
+| Playwright implementation | Witness-ordered manifests, adapter contracts and runtime observations with lineage digests |
+
+## Quick start
+
+Requirements: Node.js 20 or newer.
 
 ```bash
-node --import tsx src/cli.ts discover --config flowctl.config.yaml
-node --import tsx src/cli.ts flows list --config flowctl.config.yaml
-node --import tsx src/cli.ts guide --variant <variant-id> --env <environment> \
-  --config flowctl.config.yaml
+git clone https://github.com/TarunKurella/agentic-bdd-flowctl.git
+cd agentic-bdd-flowctl
+npm ci
+npm run check
+
+# Compile the included React/Java fixture and generate its BDD.
+npm run demo
+npm run demo:bdd
+
+# Inspect the discovered variants and the next safe action.
+node --import tsx src/cli.ts flows list \
+  --config examples/account-opening/flowctl.config.yaml
+node --import tsx src/cli.ts agent guide \
+  --config examples/account-opening/flowctl.config.yaml --json
 ```
 
-`discover` builds the configured, bounded source model, prints a graph summary and reports the next safe action. `guide` is target-aware: after a variant and environment are selected, it explains whether BDD, data confirmation, runtime grounding or an execution plan is next. `next` prints only the primary action, while `status` and `guide` show the complete lifecycle view.
+The proof fixture currently discovers two materially different submission journeys—personal and joint—not permutations of every possible input value. Generated files appear under `examples/account-opening/.flowctl/` and remain untracked.
 
-In v0.2, `<environment>` means the exact `runtime.environment` in that config file; another runtime target uses another config file. It never selects a different application-data file.
-
-For a coding assistant, generate the prompt from current repository state instead of maintaining a large static prompt:
+For your own application:
 
 ```bash
-node --import tsx src/cli.ts agent prompt --variant <variant-id> --env <environment> \
-  --config flowctl.config.yaml
+cp flowctl.config.example.yaml flowctl.config.yaml
+node --import tsx src/cli.ts doctor --config flowctl.config.yaml --json
+node --import tsx src/cli.ts agent guide --config flowctl.config.yaml --json
 ```
 
-After `npm run build`, `node dist/src/cli.js ...` is the repository-local production launcher. If this package has been deliberately linked onto `PATH`, the same commands can be shortened to `flowctl ...`; no global installation is required for the documented workflow.
+`agent guide` is the control loop. It reports the current phase, blockers and ordered `nextActions`. An assistant performs only the first applicable action, reruns the guide, and stops whenever `executor: human` is returned.
 
-See [CLI and agentic UX](docs/cli-ux.md) for the lifecycle state machine, JSON contract and exit codes.
+After `npm run build`, use `node dist/src/cli.js ...` as the repository-local production launcher. If the package is deliberately linked onto `PATH`, shorten it to `flowctl ...`; no global installation is required.
+
+## Mental model
+
+```mermaid
+flowchart LR
+  S["React + Java source"] --> E["Evidence graph"]
+  G["Graphify<br/>auxiliary evidence"] --> E
+  W["LLM Wiki<br/>glossary and labels"] --> E
+  E --> IR["Business Logic IR"]
+  IR --> V["Happy-path variants"]
+  V --> B["BDD + reusable step plans"]
+  B --> P["Playwright grounding"]
+  H["Human-approved<br/>application data"] --> P
+```
+
+Graphify and LLM Wiki enrich evidence and language; they do not authorize cross-layer joins or executable business rules. See [CLI and agentic UX](docs/cli-ux.md) for the lifecycle state machine, JSON contract and exit codes.
 
 ## The problem
 
@@ -181,7 +226,7 @@ An exact source branch does not make an entity identifier available in UAT: an a
 Requirements: Node.js 20 or newer.
 
 ```bash
-npm install
+npm ci
 npm run check
 node dist/src/cli.js --help
 ```
@@ -440,6 +485,21 @@ Future scope:
 
 The tracked milestones and acceptance criteria are in [PLAN.md](PLAN.md).
 
+## Contributing
+
+Contributions are welcome around framework extraction, graph soundness, runtime adapters, diagnostics and documentation. Keep new executable behavior source-grounded, preserve unresolved cases rather than guessing, and never commit generated `.flowctl` state or application-specific values.
+
+Before opening a pull request:
+
+```bash
+npm ci
+npm run check
+npm run demo
+npm run demo:bdd
+```
+
+When changing extraction or graph semantics, include a focused unit case and an end-to-end fixture assertion that proves the resulting lineage.
+
 ## Corporate safety model
 
 - No model API is required by the CLI.
@@ -454,15 +514,17 @@ The tracked milestones and acceptance criteria are in [PLAN.md](PLAN.md).
 
 See [SECURITY.md](SECURITY.md) for repository guidance.
 
-## Specifications
+## Documentation
 
-- [Architecture and discovery algorithm](docs/architecture.md)
-- [Artifact contracts](docs/artifact-contracts.md)
-- [Agent and runtime workflow](docs/agent-workflow.md)
-- [CLI and agentic UX](docs/cli-ux.md)
-- [Assistant prompt playbook](docs/prompts.md)
-- [Implementation plan](PLAN.md)
-- [Security model](SECURITY.md)
+| Guide | What it covers |
+| --- | --- |
+| [Architecture and discovery algorithm](docs/architecture.md) | Extraction, cross-layer joins, graph construction, path search and reduction |
+| [Artifact contracts](docs/artifact-contracts.md) | Canonical IR schemas, lineage, digests and status rules |
+| [Agent and runtime workflow](docs/agent-workflow.md) | Packets, human gates, application data and Playwright grounding |
+| [CLI and agentic UX](docs/cli-ux.md) | Lifecycle states, JSON envelopes, exit codes and next-action semantics |
+| [Assistant prompt playbook](docs/prompts.md) | Copy-ready prompts for approved VS Code assistants |
+| [Implementation plan](PLAN.md) | Milestones, acceptance criteria and future bug-finding scope |
+| [Security model](SECURITY.md) | Trust boundaries, secrets, generated data and runner constraints |
 
 ## Deliberate boundaries
 
