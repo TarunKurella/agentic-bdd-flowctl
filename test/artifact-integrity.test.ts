@@ -14,12 +14,53 @@ describe('canonical artifact integrity', () => {
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'flowctl-artifact-integrity-'));
     const config = await loadConfig(path.resolve('examples/account-opening/flowctl.config.yaml'));
-    store = new ArtifactStore({ ...config, outputRoot: path.join(root, '.flowctl') });
+    const outputRoot = path.join(root, '.flowctl');
+    store = new ArtifactStore({
+      ...config,
+      outputRoot,
+      applicationDataPath: path.join(outputRoot, 'application-data.local.yaml'),
+    });
     await store.initialize();
   });
 
   afterEach(async () => {
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('initializes an absent managed tree without creating application data and is idempotent', async () => {
+    const projectRoot = path.join(root, 'fresh-project');
+    const outputRoot = path.join(projectRoot, '.state', 'flowctl');
+    const applicationDataPath = path.join(outputRoot, 'application-data.local.yaml');
+    await fs.mkdir(projectRoot, { recursive: true });
+    const freshStore = new ArtifactStore({
+      ...store.config,
+      projectRoot,
+      configDirectory: projectRoot,
+      configPath: path.join(projectRoot, 'flowctl.config.yaml'),
+      outputRoot,
+      applicationDataPath,
+    });
+
+    await expect(fs.lstat(outputRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+    await freshStore.initialize();
+
+    for (const directory of [
+      outputRoot,
+      freshStore.artifactDirectory,
+      freshStore.dataRequirementsDirectory,
+      freshStore.workDirectory,
+      path.join(freshStore.workDirectory, 'packets'),
+      path.join(freshStore.workDirectory, 'proposals'),
+      path.join(freshStore.workDirectory, 'runtime'),
+      freshStore.generatedDirectory,
+      freshStore.decisionsDirectory,
+    ]) {
+      const stat = await fs.lstat(directory);
+      expect(stat.isDirectory()).toBe(true);
+      expect(stat.isSymbolicLink()).toBe(false);
+    }
+    await expect(fs.lstat(applicationDataPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(freshStore.initialize()).resolves.toBeUndefined();
   });
 
   it('rejects canonical data changed without a matching content digest', async () => {

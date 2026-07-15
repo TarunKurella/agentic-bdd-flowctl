@@ -16,8 +16,14 @@ let store: ArtifactStore;
 beforeAll(async () => {
   temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'flowctl-agentic-ux-'));
   const projectRoot = path.join(temporaryRoot, 'account-opening');
-  await fs.cp(path.resolve('examples/account-opening'), projectRoot, { recursive: true });
-  await fs.rm(path.join(projectRoot, '.flowctl'), { recursive: true, force: true });
+  const fixtureRoot = path.resolve('examples/account-opening');
+  await fs.cp(fixtureRoot, projectRoot, {
+    recursive: true,
+    filter: (source) => {
+      const relative = path.relative(fixtureRoot, source);
+      return relative !== '.flowctl' && !relative.startsWith(`.flowctl${path.sep}`);
+    },
+  });
   const config = await loadConfig(path.join(projectRoot, 'flowctl.config.yaml'));
   store = new ArtifactStore(config);
   await analyze(config, 'coverage');

@@ -29,6 +29,7 @@ describe('semantic packet freshness', () => {
     const base = await loadConfig(path.resolve('examples/account-opening/flowctl.config.yaml'));
     await fs.mkdir(path.join(temporaryRoot, 'frontend'), { recursive: true });
     await fs.writeFile(path.join(temporaryRoot, 'frontend', 'source.ts'), 'export const sourceVersion = 1;\n', 'utf8');
+    const outputRoot = path.join(temporaryRoot, '.flowctl');
     store = new ArtifactStore({
       ...base,
       projectRoot: temporaryRoot,
@@ -40,7 +41,8 @@ describe('semantic packet freshness', () => {
         backend: [],
         include: ['**/*.ts'],
       },
-      outputRoot: path.join(temporaryRoot, '.flowctl'),
+      outputRoot,
+      applicationDataPath: path.join(outputRoot, 'application-data.local.yaml'),
     });
     await store.initialize();
     initialSourceDigest = (await snapshotSources(store.config)).digest;

@@ -39,8 +39,14 @@ describe('complete runtime interaction grounding', () => {
   beforeEach(async () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'flowctl-runtime-'));
     const projectRoot = path.join(temporaryRoot, 'account-opening');
-    await fs.cp(path.resolve('examples/account-opening'), projectRoot, { recursive: true });
-    await fs.rm(path.join(projectRoot, '.flowctl'), { recursive: true, force: true });
+    const fixtureRoot = path.resolve('examples/account-opening');
+    await fs.cp(fixtureRoot, projectRoot, {
+      recursive: true,
+      filter: (source) => {
+        const relative = path.relative(fixtureRoot, source);
+        return relative !== '.flowctl' && !relative.startsWith(`.flowctl${path.sep}`);
+      },
+    });
     await fs.mkdir(path.join(projectRoot, 'runtime'), { recursive: true });
     await fs.writeFile(
       path.join(projectRoot, 'runtime', 'flowctl-adapters.ts'),
@@ -87,7 +93,7 @@ describe('complete runtime interaction grounding', () => {
       })),
     };
     sourceDigest = (await snapshotSources(base)).digest;
-    store = new ArtifactStore({ ...base, outputRoot: path.join(temporaryRoot, '.flowctl') });
+    store = new ArtifactStore(base);
     await store.initialize();
     await writeRuntimeArtifacts(store);
   });
