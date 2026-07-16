@@ -78,7 +78,7 @@ describe('semantic packet freshness', () => {
     const regenerated = operationCatalog(operation('operation.one', evidenceOne));
     await applyApprovedOperationDecisions(store, regenerated);
     expect(regenerated.operations[0]?.businessCommand).toEqual({
-      machineName: 'application.submit.reviewed',
+      machineName: 'operation.one.submit',
       label: 'Reviewed submit application',
       origin: 'human-reviewed',
     });
@@ -219,7 +219,7 @@ function proposalFor(packet: NonNullable<Awaited<ReturnType<typeof createOperati
     decisions: [{
       operationId: packet.allowedOperationIds[0],
       label,
-      machineName: 'application.submit.reviewed',
+      machineName: packet.operationMachineNames?.[packet.allowedOperationIds[0]!],
       aliases: [],
       explanation: 'The reviewed endpoint submits an application.',
       evidenceRefs: [packet.allowedEvidenceIds[0]],

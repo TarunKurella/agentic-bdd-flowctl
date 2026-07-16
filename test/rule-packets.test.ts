@@ -108,6 +108,22 @@ describe('bounded operation-rule packets', () => {
     await expect(validatePacketProposal(store, packet.packetId)).rejects.toThrow('unapproved authority');
   });
 
+  it('rejects literal predicate values not extracted from the endpoint constraints', async () => {
+    const packet = (await createRulePacket(store, bundle))!;
+    await fs.writeFile(packet.outputPath, JSON.stringify({
+      packetId: packet.packetId,
+      packetDigest: packet.packetDigest,
+      resolutions: [{
+        endpointId: 'endpoint.submit',
+        successPredicateExpression: 'productCode == "INVENTED_PRODUCT"',
+        explanation: 'The field exists, but this value has no source evidence.',
+        evidenceRefs: ['endpoint.submit', 'source.security'],
+      }],
+      unresolved: [{ endpointId: 'endpoint.submit', question: 'Authorization remains unresolved.', evidenceRefs: ['endpoint.submit'] }],
+    }));
+    await expect(validatePacketProposal(store, packet.packetId)).rejects.toThrow('unapproved literal value');
+  });
+
   it('preserves authenticated-without-authority as a required actor contract', async () => {
     const packet = (await createRulePacket(store, bundle))!;
     await fs.writeFile(packet.outputPath, JSON.stringify({

@@ -34,4 +34,19 @@ describe('flowctl init path safety', () => {
     await expect(fs.access(outside)).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await fs.lstat(path.join(project, 'flowctl.config.yaml'))).isSymbolicLink()).toBe(true);
   });
+
+  it('ignores generated state and local application data on initialization', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'flowctl-init-security-'));
+    const project = path.join(root, 'project');
+    await execute(process.execPath, [
+      '--import',
+      'tsx',
+      'src/cli.ts',
+      'init',
+      '--directory',
+      project,
+    ], { cwd: path.resolve('.') });
+
+    expect(await fs.readFile(path.join(project, '.gitignore'), 'utf8')).toContain('/.flowctl/');
+  });
 });

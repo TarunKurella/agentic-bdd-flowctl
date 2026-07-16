@@ -111,6 +111,7 @@ program.command('init')
     }
     const config = await loadConfig(configPath);
     await new ArtifactStore(config).initialize();
+    await ensureGeneratedStateIgnored(config);
     console.log(`Initialized ${config.outputRoot}`);
   });
 
@@ -195,6 +196,40 @@ withGuidance(program.command('guide').description('Show the guided agentic workf
   });
 
 const agent = program.command('agent').description('Generate state-aware guidance for a VS Code coding assistant.');
+agent.command('install-skill')
+  .description('Install the bundled Agentic BDD skill into an application repository.')
+  .option('--directory <path>', 'Application repository', '.')
+  .option('--json', 'Machine-readable output', false)
+  .action(async ({ directory, json }: { directory: string; json: boolean }) => {
+    const requestedRoot = path.resolve(directory);
+    await fs.mkdir(requestedRoot, { recursive: true });
+    const root = await fs.realpath(requestedRoot);
+    const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+    const source = await firstExisting([
+      path.resolve(moduleDirectory, '..', '.agents', 'skills', 'agentic-bdd', 'SKILL.md'),
+      path.resolve(moduleDirectory, '..', '..', '.agents', 'skills', 'agentic-bdd', 'SKILL.md'),
+      path.resolve('.agents', 'skills', 'agentic-bdd', 'SKILL.md'),
+    ]);
+    const destinationDirectory = await ensureDirectoryNoSymlinks(root, ['.agents', 'skills', 'agentic-bdd']);
+    const destination = path.join(destinationDirectory, 'SKILL.md');
+    const contents = await fs.readFile(source, 'utf8');
+    try {
+      await writeNewFileExclusive(destination, contents, 0o644);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      const stat = await fs.lstat(destination);
+      if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`Refusing to install through non-regular path ${destination}.`);
+      if (await fs.readFile(destination, 'utf8') !== contents) {
+        throw new Error(`Agentic BDD skill already exists with different contents at ${destination}. Review or remove it explicitly before reinstalling.`);
+      }
+    }
+    const result = {
+      skill: 'agentic-bdd',
+      destination,
+      prompt: 'Use the agentic-bdd skill. Run the state-aware Flowctl guide and help me discover source-grounded happy paths and generate BDD. Stop for missing application values or human approvals.',
+    };
+    print(result, json, `Installed Agentic BDD skill\n${destination}\n\nStarter prompt\n${result.prompt}`, { command: 'agent install-skill' });
+  });
 withGuidance(agent.command('guide').description('Show lifecycle state, blockers and exact safe actions.'))
   .action(async (options: GuidanceOptions) => {
     const config = await loadConfig(options.config);
@@ -971,6 +1006,43 @@ async function writeNewFileExclusive(destination: string, contents: string, mode
   } finally {
     await handle.close();
   }
+}
+
+async function ensureGeneratedStateIgnored(config: FlowctlConfig): Promise<void> {
+  const destination = path.join(config.projectRoot, '.gitignore');
+  let existing = '';
+  try {
+    const stat = await fs.lstat(destination);
+    if (stat.isSymbolicLink()) throw new Error(`Refusing to update symbolic link ${destination}.`);
+    if (!stat.isFile()) throw new Error(`Git ignore destination is not a regular file: ${destination}.`);
+    existing = await fs.readFile(destination, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const outputDirectory = path.relative(config.projectRoot, config.outputRoot).replaceAll(path.sep, '/');
+  const rule = `/${outputDirectory.replace(/^\/+|\/+$/g, '')}/`;
+  const lines = new Set(existing.split(/\r?\n/).map((line) => line.trim()));
+  if (lines.has(rule)) return;
+  const block = `${existing && !existing.endsWith('\n') ? '\n' : ''}# Flowctl generated state and local application data\n${rule}\n`;
+  if (existing) await fs.appendFile(destination, block, { encoding: 'utf8', mode: 0o644 });
+  else await writeNewFileExclusive(destination, block, 0o644);
+}
+
+async function ensureDirectoryNoSymlinks(root: string, segments: string[]): Promise<string> {
+  let current = root;
+  for (const segment of segments) {
+    current = path.join(current, segment);
+    try {
+      const stat = await fs.lstat(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error(`Refusing to install through non-directory path ${current}.`);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      await fs.mkdir(current);
+    }
+  }
+  return current;
 }
 
 async function explain(store: ArtifactStore, kind: string, id: string): Promise<unknown> {

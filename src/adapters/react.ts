@@ -79,12 +79,14 @@ export function extractReact(
       const tag = opening.getTagNameNode().getText();
       if (tag === 'Route' || tag.endsWith('.Route')) {
         const pathValue = jsxAttributeValue(opening.getAttribute('path'));
-        if (pathValue) {
+        const indexRoute = jsxAttributeScalar(opening.getAttribute('index')) === true;
+        if (pathValue || indexRoute) {
           const componentTarget = componentFromElementAttribute(opening.getAttribute('element'));
           const component = componentTarget?.name;
+          const effectivePath = composedJsxRoutePath(opening, pathValue ?? '');
           routes.push({
-            id: stableId('route', `${relativePath}:${pathValue}:${component ?? ''}:${componentTarget?.file ?? ''}`),
-            path: normalizeRoute(pathValue),
+            id: stableId('route', `${relativePath}:${effectivePath}:${component ?? ''}:${componentTarget?.file ?? ''}`),
+            path: effectivePath,
             ...(component ? { component } : {}),
             ...(componentTarget?.file ? { componentFile: componentTarget.file } : {}),
             sourceRef: sourceRef(relativePath, opening, component),
@@ -95,12 +97,12 @@ export function extractReact(
     routes.push(...extractObjectRouterRoutes(source, relativePath));
   }
 
-  const axiosBasePath = extractAxiosDefaultBasePath([...sourceMap.values()]);
+  const axiosBasePaths = extractAxiosBasePaths([...sourceMap.values()]);
   const handlersByFile = new Map<string, ReactHandlerFact[]>();
   for (const [relativePath, source] of sourceMap) {
     const calls = source.getDescendantsOfKind(SyntaxKind.CallExpression);
     const fileHttp = calls.flatMap((call) => {
-      const fact = extractHttpCall(call, relativePath, axiosBasePath);
+      const fact = extractHttpCall(call, relativePath, axiosBasePaths);
       return fact ? [fact] : [];
     });
     const fileNavigations = calls.flatMap((call) => {
@@ -119,7 +121,7 @@ export function extractReact(
     const fileHttp: HttpOperationFact[] = [];
     const fileNavigations: NavigationFact[] = [];
     for (const call of source.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-      const http = extractHttpCall(call, relativePath, axiosBasePath);
+      const http = extractHttpCall(call, relativePath, axiosBasePaths);
       if (http) {
         httpOperations.push(http);
         fileHttp.push(http);
@@ -495,9 +497,11 @@ function extractObjectRouterRoutes(source: SourceFile, relativePath: string): Re
       const pathNode = propertyInitializer(object, 'path');
       const localPath = pathNode ? staticValue(pathNode) : undefined;
       const effectivePath = localPath === undefined ? parentPath : joinRoutePath(parentPath, localPath);
+      const indexNode = propertyInitializer(object, 'index');
+      const indexRoute = indexNode ? staticScalar(indexNode) === true : false;
       const children = resolveArrayLiteral(propertyInitializer(object, 'children'));
       const component = componentFromElementExpression(propertyInitializer(object, 'element'));
-      if (component && component.name !== 'Navigate' && pathNode) {
+      if (component && component.name !== 'Navigate' && (pathNode || indexRoute)) {
         routes.push({
           id: stableId('route', `${relativePath}:${effectivePath}:${component.name}:${component.file ?? ''}`),
           path: normalizeRoute(effectivePath || '/'),
@@ -509,6 +513,24 @@ function extractObjectRouterRoutes(source: SourceFile, relativePath: string): Re
       if (children) visitRouteObjects(children, effectivePath);
     }
   }
+}
+
+function composedJsxRoutePath(
+  opening: ReturnType<JsxElement['getOpeningElement']> | JsxSelfClosingElement,
+  localPath: string,
+): string {
+  if (localPath.startsWith('/')) return normalizeRoute(localPath);
+  const parentRoute = opening.getFirstAncestor((ancestor) => {
+    if (!Node.isJsxElement(ancestor)) return false;
+    if (ancestor.getOpeningElement().getStart() === opening.getStart()) return false;
+    const tag = ancestor.getOpeningElement().getTagNameNode().getText();
+    return tag === 'Route' || tag.endsWith('.Route');
+  });
+  if (!parentRoute || !Node.isJsxElement(parentRoute)) return normalizeRoute(localPath || '/');
+  const parentOpening = parentRoute.getOpeningElement();
+  const parentLocalPath = jsxAttributeValue(parentOpening.getAttribute('path')) ?? '';
+  const parentPath = composedJsxRoutePath(parentOpening, parentLocalPath);
+  return joinRoutePath(parentPath, localPath);
 }
 
 function resolveArrayLiteral(node: Node | undefined): import('ts-morph').ArrayLiteralExpression | undefined {
@@ -678,7 +700,7 @@ function nearestEnclosingFunction(node: Node): Node | undefined {
   ));
 }
 
-function extractHttpCall(call: CallExpression, relativePath: string, axiosBasePath?: string): HttpOperationFact | undefined {
+function extractHttpCall(call: CallExpression, relativePath: string, axiosBasePaths: Map<string, string>): HttpOperationFact | undefined {
   const expression = call.getExpression().getText();
   const args = call.getArguments();
   let method: string | undefined;
@@ -712,7 +734,7 @@ function extractHttpCall(call: CallExpression, relativePath: string, axiosBasePa
   }
 
   if (!method || !pathTemplate) return undefined;
-  pathTemplate = normalizeHttpPath(pathTemplate, expression, axiosBasePath);
+  pathTemplate = normalizeHttpPath(pathTemplate, expression, axiosBasePaths, relativePath);
   const callerSymbol = enclosingFunctionName(call);
   payloadShape ??= payloadNode
     ? extractPayloadShape(unwrapJsonSerialization(payloadNode), relativePath)
@@ -2499,7 +2521,7 @@ function normalizeRoute(value: string): string {
   return normalized.startsWith('/') ? normalized : `/${normalized}`;
 }
 
-function extractAxiosDefaultBasePath(sources: SourceFile[]): string | undefined {
+function extractAxiosBasePaths(sources: SourceFile[]): Map<string, string> {
   const values = sources.flatMap((source) => source.getDescendantsOfKind(SyntaxKind.BinaryExpression)
     .filter((expression) => expression.getOperatorToken().getKind() === SyntaxKind.EqualsToken
       && expression.getLeft().getText() === 'axios.defaults.baseURL')
@@ -2507,21 +2529,38 @@ function extractAxiosDefaultBasePath(sources: SourceFile[]): string | undefined 
     .filter((value): value is string => Boolean(value))
     .map((value) => urlPath(value)));
   const unique = [...new Set(values)];
-  return unique.length === 1 ? unique[0] : undefined;
+  const result = new Map<string, string>();
+  if (unique.length === 1) {
+    result.set('*:axios', unique[0]!);
+    result.set('*:requests', unique[0]!);
+  }
+  for (const source of sources) {
+    for (const declaration of source.getVariableDeclarations()) {
+      const initializer = declaration.getInitializer();
+      if (!initializer || !Node.isCallExpression(initializer) || initializer.getExpression().getText() !== 'axios.create') continue;
+      const options = resolveObjectLiteral(initializer.getArguments()[0]);
+      const baseUrl = propertyStaticValue(options, 'baseURL');
+      const relativePath = source.getFilePath().replace(/^\/+/, '');
+      if (baseUrl) result.set(`${relativePath}:${declaration.getName()}`, urlPath(baseUrl));
+    }
+  }
+  return result;
 }
 
-function normalizeHttpPath(value: string, expression: string, axiosBasePath?: string): string {
+function normalizeHttpPath(value: string, expression: string, axiosBasePaths: Map<string, string>, relativePath: string): string {
   if (/^https?:\/\//i.test(value)) return urlPath(value);
-  const normalized = normalizeRoute(value);
-  if (!axiosBasePath || (!expression.startsWith('axios.') && !expression.startsWith('requests.'))) return normalized;
+  const normalized = normalizeRoute(value.split(/[?#]/, 1)[0] ?? value);
+  const client = expression.split('.')[0] ?? '';
+  const axiosBasePath = axiosBasePaths.get(`${relativePath}:${client}`) ?? axiosBasePaths.get(`*:${client}`);
+  if (!axiosBasePath) return normalized;
   if (normalized === axiosBasePath || normalized.startsWith(`${axiosBasePath}/`)) return normalized;
   return normalizeRoute(`${axiosBasePath}/${normalized.replace(/^\//, '')}`);
 }
 
 function urlPath(value: string): string {
-  const match = value.match(/^https?:\/\/[^/]+(\/[^?#]*)?(\?[^#]*)?/i);
+  const match = value.match(/^https?:\/\/[^/]+(\/[^?#]*)?/i);
   if (!match) return normalizeRoute(value);
-  return normalizeRoute(`${match[1] ?? '/'}${match[2] ?? ''}`);
+  return normalizeRoute(match[1] ?? '/');
 }
 
 function enclosingFunctionName(node: Node): string | undefined {

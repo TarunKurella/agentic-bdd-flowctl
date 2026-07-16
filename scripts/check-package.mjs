@@ -27,6 +27,7 @@ try {
   const packagedPaths = new Set(packResult.files.map((entry) => entry.path));
   const requiredPaths = [
     'dist/src/cli.js',
+    '.agents/skills/agentic-bdd/SKILL.md',
     'flowctl.config.example.yaml',
     'package.json',
     'README.md',
@@ -64,6 +65,10 @@ try {
     process.platform === 'win32' ? 'flowctl.cmd' : 'flowctl',
   );
   execFileSync(cliPath, ['--help'], { stdio: 'inherit' });
+  const cliVersion = execFileSync(cliPath, ['--version'], { encoding: 'utf8' }).trim();
+  if (cliVersion !== installedPackage.version) {
+    throw new Error(`CLI version ${cliVersion} does not match package version ${installedPackage.version}.`);
+  }
 
   console.log(`Verified ${installedPackage.name}@${installedPackage.version} from ${packResult.filename}.`);
 } finally {

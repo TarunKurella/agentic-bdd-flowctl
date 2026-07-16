@@ -27,6 +27,52 @@ describe('React flow extraction', () => {
     expect(result.pages.find((page) => page.name === 'CheckoutPage')?.routeIds).toHaveLength(1);
   });
 
+  it('composes nested JSX routes and createBrowserRouter index routes', () => {
+    const jsx = extractReact([tsxAt('frontend/src/routes.tsx', `
+      const Home = () => <h1>Home</h1>;
+      const Details = () => <h1>Details</h1>;
+      const Disabled = () => <h1>Disabled</h1>;
+      export const routes = <Routes><Route path="accounts"><Route index element={<Home />} /><Route index={false} element={<Disabled />} /><Route path="details" element={<Details />} /></Route></Routes>;
+    `)]);
+    expect(jsx.routes.map((route) => [route.path, route.component])).toEqual(expect.arrayContaining([
+      ['/accounts', 'Home'],
+      ['/accounts/details', 'Details'],
+    ]));
+    expect(jsx.routes.find((route) => route.component === 'Disabled')).toBeUndefined();
+
+    const object = extractReact([tsxAt('frontend/src/routes.tsx', `
+      import { createBrowserRouter } from 'react-router-dom';
+      const Home = () => <h1>Home</h1>;
+      export const router = createBrowserRouter([{ path: '/accounts', children: [{ index: true, element: <Home /> }] }]);
+    `)]);
+    expect(object.routes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: '/accounts', component: 'Home' }),
+    ]));
+  });
+
+  it('resolves axios.create baseURL clients and removes query strings from endpoint identity', () => {
+    const result = extractReact([
+      tsxAt('frontend/src/api.tsx', `
+        import axios from 'axios';
+        const api = axios.create({ baseURL: 'http://localhost:8080/api/applications/' });
+        export async function submit(payload: object) {
+          return api.post('submit?draft=false', payload);
+        }
+      `),
+      tsxAt('frontend/src/admin-api.tsx', `
+        import axios from 'axios';
+        const api = axios.create({ baseURL: 'http://localhost:8080/api/admin/' });
+        export async function approve(payload: object) {
+          return api.post('approve', payload);
+        }
+      `),
+    ]);
+    expect(result.httpOperations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ method: 'POST', pathTemplate: '/api/applications/submit' }),
+      expect.objectContaining({ method: 'POST', pathTemplate: '/api/admin/approve' }),
+    ]));
+  });
+
   it('normalizes axios base URLs and resolves common callback wrappers across handlers', () => {
     const result = extractReact([
       tsxAt('frontend/src/api.ts', `

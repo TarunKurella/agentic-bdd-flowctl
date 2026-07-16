@@ -927,6 +927,7 @@ export function reduceVariants(
         successNode: witness.nodePath.at(-1),
         activeFieldContracts: activeFieldContracts(witness, pages, graph),
         requestPayloadContracts: requestPayloadSignature(witness, graph),
+        assignments: witness.assignments,
       };
       const signature = sha256(stableJson(signatureValue));
       groups.set(signature, [...(groups.get(signature) ?? []), witness]);

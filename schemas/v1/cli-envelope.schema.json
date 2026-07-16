@@ -4,7 +4,7 @@
   "title": "Flowctl CLI envelope",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "command", "ok", "code", "nextActions", "diagnostics"],
+  "required": ["schemaVersion", "command", "ok", "code", "nextActions", "diagnostics", "agent"],
   "properties": {
     "schemaVersion": { "const": "flowctl.cli.v1" },
     "command": { "type": "string", "minLength": 1 },

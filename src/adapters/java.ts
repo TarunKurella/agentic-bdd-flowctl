@@ -119,7 +119,7 @@ export function extractJava(files: SourceFile[]): JavaExtraction {
       const endpointId = stableId('java-endpoint', `${mapping.method}:${endpointPath}:${className}.${candidate.name}`);
       let authorization = extractAuthorization(file, candidate, classSecurity);
       if (authorization.fact.status === 'conditional' && authorization.fact.sourceExpression === 'unannotated-endpoint') {
-        authorization = resolveGlobalSpringAuthorization(globalSecurity, endpointPath) ?? authorization;
+        authorization = resolveGlobalSpringAuthorization(globalSecurity, endpointPath, mapping.method) ?? authorization;
       }
       const endpointPermissionIds: string[] = [];
 
@@ -393,6 +393,7 @@ function classSecurityAnnotations(file: SourceFile): AnnotationCandidate[] {
 
 interface GlobalSpringSecurityRule {
   paths: string[] | 'any';
+  methods: string[] | 'any';
   access: 'permit-all' | 'authenticated' | 'authorities';
   authorities: string[];
   sourceRef: SourceRef;
@@ -419,6 +420,9 @@ function extractGlobalSpringSecurity(files: SourceFile[]): GlobalSpringSecurityR
       ? 'any' as const
       : [...selectorArguments.matchAll(/["']([^"']+)["']/g)].map((value) => normalizeRoute(value[1]!));
     if (paths !== 'any' && !paths.length) continue;
+    const httpMethods = selector === 'anyRequest'
+      ? []
+      : [...selectorArguments.matchAll(/\bHttpMethod\.([A-Z]+)\b/g)].map((value) => value[1]!);
     const literal = accessArguments.match(/["']([^"']+)["']/)?.[1];
     const authorities = method === 'hasRole' && literal
       ? [literal.startsWith('ROLE_') ? literal : `ROLE_${literal}`]
@@ -428,6 +432,7 @@ function extractGlobalSpringSecurity(files: SourceFile[]): GlobalSpringSecurityR
     const sourceExpression = match[0].replace(/\s+/g, ' ');
     rules.push({
       paths,
+      methods: httpMethods.length ? [...new Set(httpMethods)] : 'any',
       access: method === 'permitAll' ? 'permit-all' : method === 'authenticated' ? 'authenticated' : 'authorities',
       authorities,
       sourceRef: ref(file, line, 'SecurityFilterChain', sourceExpression),
@@ -440,10 +445,12 @@ function extractGlobalSpringSecurity(files: SourceFile[]): GlobalSpringSecurityR
 function resolveGlobalSpringAuthorization(
   rules: GlobalSpringSecurityRule[] | undefined,
   endpointPath: string,
+  endpointMethod: string,
 ): { fact: JavaAuthorizationFact; authorities: string[] } | undefined {
   if (!rules) return undefined;
   const rule = rules.find((candidate) => (
-    candidate.paths === 'any' || candidate.paths.some((pattern) => springSecurityPathMatches(pattern, endpointPath))
+    (candidate.methods === 'any' || candidate.methods.includes(endpointMethod.toUpperCase()))
+    && (candidate.paths === 'any' || candidate.paths.some((pattern) => springSecurityPathMatches(pattern, endpointPath)))
   ));
   if (!rule) return undefined;
   if (rule.access === 'permit-all') {
@@ -1442,6 +1449,17 @@ function validationsFromAnnotation(annotation: string): { kind: InputConstraint[
 
 function extractEffects(file: SourceFile, candidate: MethodCandidate, method: string, entity: string): TerminalEffectFact[] {
   const results: TerminalEffectFact[] = [];
+  const explicitFailure = topLevelMatch(candidate.body, /\b(?:ResponseEntity\.status\s*\(\s*(?:HttpStatus\.)?|new\s+ResponseEntity\s*<[^>]*>\s*\([^,]*,\s*HttpStatus\.)([A-Z][A-Z0-9_]*)/);
+  const failureStatus = explicitFailure?.[1];
+  const successfulStatuses = new Set(['OK', 'CREATED', 'ACCEPTED', 'NO_CONTENT', 'RESET_CONTENT', 'PARTIAL_CONTENT', 'MULTI_STATUS', 'ALREADY_REPORTED', 'IM_USED']);
+  if (failureStatus && !successfulStatuses.has(failureStatus)) {
+    return [{
+      id: stableId('terminal-effect', `${file.relativePath}:${candidate.name}:${entity}:explicit-failure:${failureStatus}`),
+      entity,
+      kind: 'unknown-mutation',
+      sourceRef: ref(file, candidate.line, candidate.name, `explicit ${failureStatus} response prevents a proved successful terminal effect`),
+    }];
+  }
   const statusMatch = topLevelMatch(candidate.body, /\b([A-Za-z_$][\w$]*)\.setStatus\s*\(\s*(?:[A-Za-z_$][\w$]*\.)?([A-Z][A-Z0-9_]*)/);
   const statusEntity = statusMatch?.[1] ? entityForExpression(file, candidate, statusMatch[1]) : undefined;
   const status = statusMatch?.[2];

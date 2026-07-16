@@ -7,7 +7,6 @@ import { recordGrounding, verifyGroundingManifest } from './grounding.js';
 
 const DEFAULT_RUNNER_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_OBSERVATION_BYTES = 10 * 1024 * 1024;
-const MAX_STDERR_TAIL_BYTES = 8 * 1024;
 const MINIMAL_RUNNER_ENVIRONMENT = [
   'PATH',
   'HOME',
@@ -63,7 +62,7 @@ export async function planGroundingRunner(store: ArtifactStore): Promise<Groundi
       'The runner inherits only minimal OS/runtime variables plus names explicitly approved in runtime.runner.envAllowlist; application-specific values belong in the application-data handoff, not process environment variables.',
       'The runner must re-read the verified manifest, invoke its registered adapters in exact step order and write one complete runtime-observation-v1 JSON file.',
       'The runner resolves actor/field values in memory from manifest handoffs and must never write resolved values, credentials or raw secrets to the observation.',
-      'The runner must not print resolved values or secrets; Flowctl may return a bounded stderr tail when the process fails.',
+      'The runner must not print resolved values or secrets; Flowctl suppresses runner stdout and stderr from CLI responses.',
       'A non-zero exit, timeout, missing/symlink/non-regular/oversized observation or schema/digest mismatch fails without recording runtime bindings.',
     ],
     next: 'After configuring runtime.runner, prepare or resume a grounding manifest and run `flowctl ground run --run <run-id>`.',
@@ -106,13 +105,18 @@ export async function runGrounding(store: ArtifactStore, runId: string): Promise
   const args = runner.args.map((argument) => argument
     .replaceAll('{manifest}', manifestPath)
     .replaceAll('{observation}', observationPath));
-  await launchRunner({
-    command: runner.command,
-    args,
-    cwd: store.config.projectRoot,
-    timeoutMs: runner.timeoutMs ?? DEFAULT_RUNNER_TIMEOUT_MS,
-    env: buildRunnerEnvironment(runner.envAllowlist),
-  });
+  try {
+    await launchRunner({
+      command: runner.command,
+      args,
+      cwd: store.config.projectRoot,
+      timeoutMs: runner.timeoutMs ?? DEFAULT_RUNNER_TIMEOUT_MS,
+      env: buildRunnerEnvironment(runner.envAllowlist),
+    });
+  } catch (error) {
+    await store.removeManagedFile(observationPath);
+    throw error;
+  }
   const stat = await store.inspectManagedEntry(observationPath);
   if (!stat) throw new Error(`Grounding runner exited successfully but did not write ${observationPath}.`);
   if (stat.isSymbolicLink() || !stat.isFile()) {
@@ -154,32 +158,29 @@ async function launchRunner(options: {
       windowsHide: true,
     });
     let settled = false;
-    let stderrTail = '';
-    child.stderr?.on('data', (chunk: Buffer | string) => {
-      stderrTail += chunk.toString();
-      const bytes = Buffer.byteLength(stderrTail);
-      if (bytes > MAX_STDERR_TAIL_BYTES) {
-        stderrTail = Buffer.from(stderrTail).subarray(bytes - MAX_STDERR_TAIL_BYTES).toString();
-      }
-    });
-    const runnerError = (message: string) => new Error(`${message}${stderrTail.trim() ? `\nRunner stderr tail:\n${stderrTail.trim()}` : ''}`);
+    let timedOut = false;
+    let force: NodeJS.Timeout | undefined;
+    child.stderr?.resume();
+    const runnerError = (message: string) => new Error(message);
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      if (force) clearTimeout(force);
       if (error) reject(error);
       else resolve();
     };
     const timeout = setTimeout(() => {
+      timedOut = true;
       child.kill('SIGTERM');
-      const force = setTimeout(() => child.kill('SIGKILL'), 5_000);
+      force = setTimeout(() => child.kill('SIGKILL'), 5_000);
       force.unref();
-      finish(runnerError(`Grounding runner exceeded ${options.timeoutMs} ms and was terminated.`));
     }, options.timeoutMs);
     timeout.unref();
     child.once('error', (error) => finish(runnerError(`Cannot launch grounding runner ${options.command}: ${error.message}`)));
     child.once('close', (code, signal) => {
-      if (code === 0) finish();
+      if (timedOut) finish(runnerError(`Grounding runner exceeded ${options.timeoutMs} ms and was terminated.`));
+      else if (code === 0) finish();
       else finish(runnerError(`Grounding runner exited with ${signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`}.`));
     });
   });

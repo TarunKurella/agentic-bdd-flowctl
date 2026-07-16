@@ -14,6 +14,7 @@ export interface RuleGap {
   endpointId: string;
   gapKinds: Array<'authorization' | 'success-predicate'>;
   allowedPredicatePaths: string[];
+  allowedPredicateValues: Array<string | number | boolean | null>;
   allowedAuthorities: string[];
 }
 
@@ -23,6 +24,7 @@ export interface AgentPacket {
   question: string;
   allowedEvidenceIds: string[];
   allowedOperationIds: string[];
+  operationMachineNames?: Record<string, string>;
   allowedEndpointIds?: string[];
   ruleGaps?: RuleGap[];
   allowedOutputFields: string[];
@@ -40,11 +42,13 @@ const PacketSchema = z.object({
   question: z.string(),
   allowedEvidenceIds: z.array(z.string()),
   allowedOperationIds: z.array(z.string()),
+  operationMachineNames: z.record(z.string(), z.string()).optional(),
   allowedEndpointIds: z.array(z.string()).optional(),
   ruleGaps: z.array(z.object({
     endpointId: z.string(),
     gapKinds: z.array(z.enum(['authorization', 'success-predicate'])),
     allowedPredicatePaths: z.array(z.string()),
+    allowedPredicateValues: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])),
     allowedAuthorities: z.array(z.string()),
   })).optional(),
   allowedOutputFields: z.array(z.string()),
@@ -184,6 +188,13 @@ async function buildRulePacket(store: ArtifactStore, bundle: ExtractionBundle): 
           ...validationPaths,
           ...validationPaths.map((value) => value.split('.').at(-1)!).filter((leaf) => leafCounts[leaf] === 1),
         ])].sort(),
+        allowedPredicateValues: [...new Set(bundle.validations
+          .filter((validation) => endpoint.validationIds.includes(validation.id))
+          .filter((validation) => validation.kind === 'enum' || (
+            ['min', 'max'].includes(validation.kind) && validation.domain === 'numeric'
+          ))
+          .flatMap((validation) => Array.isArray(validation.value) ? validation.value : validation.value === undefined ? [] : [validation.value]))]
+          .sort((left, right) => stableJson(left).localeCompare(stableJson(right))),
         allowedAuthorities: authorityCandidates(endpoint.authorization.sourceExpression),
       };
     })
@@ -229,6 +240,7 @@ async function buildOperationPacket(store: ArtifactStore, catalog: OperationCata
     question: 'Propose readable business-command names and semantic family hints for the source-supported terminal operations.',
     allowedEvidenceIds: [...new Set(candidates.flatMap((operation) => operation.evidenceRefs))].sort(),
     allowedOperationIds: candidates.map((operation) => operation.id).sort(),
+    operationMachineNames: Object.fromEntries(candidates.map((operation) => [operation.id, operation.businessCommand.machineName])),
     allowedOutputFields: ['operationId', 'label', 'machineName', 'aliases', 'familyHint', 'explanation', 'evidenceRefs'],
     forbiddenClaims: ['new predicates', 'new graph edges', 'satisfiability', 'runtime success', 'UAT identifiers', 'credentials'],
     responseSchema: 'agent-operation-proposal-v1',
@@ -261,6 +273,10 @@ export async function validatePacketProposal(store: ArtifactStore, packetId: str
     if (!('decisions' in proposal)) throw new Error(`Packet ${packetId} requires an operation semantic proposal.`);
     for (const decision of proposal.decisions) {
       if (!packet.allowedOperationIds.includes(decision.operationId)) throw new Error(`Operation ${decision.operationId} is not allowed by packet ${packetId}.`);
+      const canonicalMachineName = packet.operationMachineNames?.[decision.operationId];
+      if (!canonicalMachineName || decision.machineName !== canonicalMachineName) {
+        throw new Error(`Operation ${decision.operationId} machineName is compiler-owned and must remain ${canonicalMachineName ?? '<missing>'}.`);
+      }
       assertEvidenceRefs(packet, evidenceIds, decision.evidenceRefs);
     }
     for (const unresolved of proposal.unresolved) {
@@ -315,6 +331,12 @@ function validateRuleProposal(
       }
       const unapprovedPaths = predicatePaths(predicate).filter((value) => !gap.allowedPredicatePaths.includes(value));
       if (unapprovedPaths.length) throw new Error(`Success predicate for ${resolution.endpointId} uses unapproved path(s): ${unapprovedPaths.join(', ')}.`);
+      const unapprovedValues = predicateLiterals(predicate).filter((value) => (
+        value !== null && !gap.allowedPredicateValues.some((allowed) => stableJson(allowed) === stableJson(value))
+      ));
+      if (unapprovedValues.length) {
+        throw new Error(`Success predicate for ${resolution.endpointId} uses unapproved literal value(s): ${unapprovedValues.map((value) => stableJson(value)).join(', ')}.`);
+      }
     }
     if (!resolution.evidenceRefs.includes(resolution.endpointId)) {
       throw new Error(`Resolution ${resolution.endpointId} must cite its endpoint evidence ID.`);
@@ -385,6 +407,22 @@ function predicatePaths(predicate: Predicate): string[] {
   return [...new Set(paths)].sort();
 }
 
+function predicateLiterals(predicate: Predicate): Array<string | number | boolean | null> {
+  const values: Array<string | number | boolean | null> = [];
+  const value = (candidate: { kind: string; value?: string | number | boolean | null }): void => {
+    if (candidate.kind === 'literal') values.push(candidate.value ?? null);
+  };
+  const visit = (candidate: Predicate): void => {
+    if (candidate.kind === 'not') visit(candidate.operand);
+    else if (candidate.kind === 'all' || candidate.kind === 'any') candidate.operands.forEach(visit);
+    else if (candidate.kind === 'exists') value(candidate.value);
+    else if (candidate.kind === 'compare') { value(candidate.left); value(candidate.right); }
+    else if (candidate.kind === 'member-of') { value(candidate.value); candidate.values.forEach(value); }
+  };
+  visit(predicate);
+  return [...new Map(values.map((candidate) => [stableJson(candidate), candidate])).values()];
+}
+
 export async function isPacketProposalValidated(store: ArtifactStore, packet: AgentPacket): Promise<boolean> {
   try {
     const validation = ValidatedProposalSchema.parse(JSON.parse(await store.readManagedFile(
@@ -445,7 +483,7 @@ export async function applyApprovedOperationDecisions(store: ArtifactStore, cata
     const operation = catalog.operations.find((candidate) => candidate.id === decision.operationId);
     if (!operation) continue;
     operation.businessCommand = {
-      machineName: decision.machineName,
+      machineName: operation.businessCommand.machineName,
       label: decision.label,
       ...(decision.aliases?.length ? { aliases: decision.aliases } : {}),
       ...(decision.familyHint ? { familyHint: decision.familyHint } : {}),

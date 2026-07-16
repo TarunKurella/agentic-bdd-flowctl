@@ -23,11 +23,12 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
 
       - name: Require tag and package versions to match
@@ -39,6 +40,11 @@ jobs:
             echo "::error title=Release version mismatch::Tag $RELEASE_TAG must match package.json version v$package_version."
             exit 1
           fi
+
+      - name: Require the release commit on main
+        run: |
+          git fetch --no-tags origin main --depth=1
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
       - name: Install locked dependencies
         run: npm ci --ignore-scripts
@@ -53,6 +59,7 @@ jobs:
         run: |
           mkdir -p release
           npm pack --pack-destination release
+          npm sbom --sbom-format cyclonedx > release/sbom.cdx.json
           cd release
           sha256sum ./*.tgz > SHA256SUMS.txt
 
@@ -62,7 +69,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" release/* --clobber
-          else
-            gh release create "$RELEASE_TAG" release/* --verify-tag --generate-notes --title "$RELEASE_TAG"
+            echo "::error title=Immutable release::Release $RELEASE_TAG already exists; publish a new version instead of replacing assets."
+            exit 1
           fi
+          gh release create "$RELEASE_TAG" release/* --verify-tag --generate-notes --title "$RELEASE_TAG"

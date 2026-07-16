@@ -1,5 +1,6 @@
 import type { Diagnostic } from '../ir/model.js';
 import { sha256, stableJson } from '../core/stable.js';
+import { shellQuote } from '../core/command.js';
 import type { GuideAction } from './guide.js';
 
 export interface AgentDirective {
@@ -196,7 +197,7 @@ function buildAgentDirective(options: {
     afterAction: {
       expectedStateChange: options.override?.expectedStateChange
         ?? (primary ? expectedStateChange(primary) : expectedStateWithoutAction(options.ok, options.code)),
-      resumeCommand: primary ? resumeCommandForAction(primary, options.resumeCommand) : options.resumeCommand,
+      resumeCommand: runnableCommand(primary ? resumeCommandForAction(primary, options.resumeCommand) : options.resumeCommand),
       ifStateUnchanged: options.override?.ifStateUnchanged ?? (primary
         ? `Do not repeat ${primary.id}. Report NO_PROGRESS with this directiveId and inspect diagnostics, source/config/artifact changes, or the required human gate.`
         : 'Do not retry the failed or informational command as a substitute for obtaining current lifecycle guidance.'),
@@ -254,9 +255,18 @@ function instructionForAction(action: GuideAction): string {
 }
 
 function machineCommand(command: string): string {
-  return /(?:^|\s)--json(?:\s|$)/.test(command) || /(?:^|\s)--help(?:\s|$)/.test(command)
-    ? command
-    : `${command} --json`;
+  const runnable = runnableCommand(command);
+  return /(?:^|\s)--json(?:\s|$)/.test(runnable) || /(?:^|\s)--help(?:\s|$)/.test(runnable)
+    ? runnable
+    : `${runnable} --json`;
+}
+
+function runnableCommand(command: string): string {
+  if (!command.startsWith('flowctl ')) return command;
+  const script = process.argv[1];
+  if (!script || !/(?:^|\/)src\/cli\.(?:ts|js)$/.test(script.replaceAll('\\', '/'))) return command;
+  const launcher = [process.execPath, ...process.execArgv, script].map(shellQuote).join(' ');
+  return `${launcher}${command.slice('flowctl'.length)}`;
 }
 
 function resumeCommandForAction(action: GuideAction, resumeCommand: string): string {

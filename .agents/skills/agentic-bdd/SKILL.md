@@ -22,8 +22,8 @@ Resolve the launcher and configuration once before the loop. Use `flowctl` when 
 11. Keep `.flowctl/generated/features/journeys/*.feature` for satisfiable runnable journeys. Treat `.flowctl/generated/review/**/*.feature.txt` as `@review-only` and outside Playwright-BDD discovery.
 12. Stop on review, missing/unconfirmed data, stale artifacts, uncovered in-scope operations, security denial, unresolved runtime controls or source/runtime contradiction. A simple supported top-level Java throw guard may produce a success predicate; complex rules, dynamic repeated-row controls and entity prerequisites without one unique selector remain review-only.
 
-For source discovery or proof semantics, read `../../../docs/architecture.md` and `../../../docs/artifact-contracts.md`.
+When operating inside the Flowctl source repository and these files exist, read `../../../docs/architecture.md` and `../../../docs/artifact-contracts.md` for source discovery or proof semantics. A skill copied into an application repository is standalone; do not search for missing Flowctl documentation there.
 
-For CLI states and machine output, read `../../../docs/cli-ux.md`. For packets, data gates or runtime rehearsal, read `../../../docs/agent-workflow.md`.
+When operating inside the Flowctl source repository and these files exist, read `../../../docs/cli-ux.md` for CLI states and `../../../docs/agent-workflow.md` for packets, data gates or runtime rehearsal. Otherwise, use the versioned `agent guide --json` response as the authoritative protocol.
 
 Do not edit generated canonical artifacts manually. Put accepted human decisions under `.flowctl/decisions/` and project-specific application bindings in the ignored `.flowctl/application-data.local.yaml` file.

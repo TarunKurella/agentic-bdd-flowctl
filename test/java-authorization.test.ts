@@ -119,6 +119,57 @@ describe('Spring authorization extraction', () => {
     expect(java.endpoints.find((endpoint) => endpoint.handler === 'submit')?.authorization.status).toBe('authenticated');
   });
 
+  it('keeps method-specific Spring Security rules separate for the same path', () => {
+    const java = extractJava([
+      javaAt('backend/SecurityConfig.java', `
+        @Configuration
+        public class SecurityConfig {
+          @Bean
+          SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+            http.authorizeHttpRequests(requests -> requests
+              .requestMatchers(HttpMethod.GET, "/api/items").permitAll()
+              .requestMatchers(HttpMethod.POST, "/api/items").hasAuthority("ITEM_CREATE")
+              .anyRequest().authenticated());
+            return http.build();
+          }
+        }
+      `),
+      javaFile(`
+        @RestController
+        public class ApplicationController {
+          @GetMapping("/api/items")
+          public Object list() { return service.list(); }
+          @PostMapping("/api/items")
+          public Object create(Object request) { repository.save(request); return request; }
+        }
+      `),
+    ]);
+
+    expect(java.endpoints.find((endpoint) => endpoint.method === 'GET')?.authorization.status).toBe('anonymous');
+    const create = java.endpoints.find((endpoint) => endpoint.method === 'POST');
+    expect(create?.authorization.status).toBe('exact');
+    expect(java.permissions.find((permission) => create?.permissionIds.includes(permission.id))?.authority).toBe('ITEM_CREATE');
+  });
+
+  it('does not treat a persistence call followed by an explicit failure response as a happy terminal effect', () => {
+    const java = extractJava([javaFile(`
+      @RestController
+      public class ApplicationController {
+        @PermitAll
+        @PostMapping("/api/applications")
+        public ResponseEntity<Object> submit(Object request) {
+          applicationRepository.save(request);
+          return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
+        }
+      }
+    `)]);
+
+    expect(java.effects).toEqual([expect.objectContaining({ kind: 'unknown-mutation' })]);
+    expect(java.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'TERMINAL_EFFECT_UNRESOLVED' }),
+    ]));
+  });
+
   it('recognizes a successful JWT response as an authentication-session terminal effect', () => {
     const java = extractJava([javaFile(`
       @RestController

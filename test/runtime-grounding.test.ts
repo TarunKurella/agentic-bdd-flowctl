@@ -675,7 +675,7 @@ describe('complete runtime interaction grounding', () => {
     await expect(fs.access(path.join(store.workDirectory, 'runtime', `${manifest.runId}.observation.json`))).rejects.toThrow();
   });
 
-  it('returns a bounded runner stderr tail when the external process fails', async () => {
+  it('suppresses runner stderr when the external process fails', async () => {
     await writeApplicationBindings(store, true);
     const manifest = await prepareAndReadManifest(store);
     const failureScript = path.join(temporaryRoot, 'failing-grounding-runner.cjs');
@@ -687,7 +687,8 @@ describe('complete runtime interaction grounding', () => {
       envAllowlist: [],
     };
 
-    await expect(runGrounding(store, manifest.runId)).rejects.toThrow(/code 17.*stderr tail.*selector target was not actionable/is);
+    await expect(runGrounding(store, manifest.runId)).rejects.toThrow(/code 17/i);
+    await expect(runGrounding(store, manifest.runId)).rejects.not.toThrow(/selector target was not actionable/i);
   });
 
   it('does not launder bindings whose upstream artifact lineage differs', async () => {
