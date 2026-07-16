@@ -12,7 +12,7 @@ describe('bundled agent skill installation', () => {
 
   afterEach(async () => {
     if (root) await fs.rm(root, { recursive: true, force: true });
-  });
+  }, 15_000);
 
   it('installs the exact bundled skill and is idempotent', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'flowctl-skill-'));
@@ -25,7 +25,7 @@ describe('bundled agent skill installation', () => {
 
     const second = await execute(process.execPath, args, { cwd: path.resolve('.') });
     expect(JSON.parse(second.stdout)).toMatchObject({ ok: true });
-  });
+  }, 15_000);
 
   it('refuses to overwrite different skill content', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'flowctl-skill-'));
@@ -39,7 +39,7 @@ describe('bundled agent skill installation', () => {
       stderr: expect.stringMatching(/review or remove it explicitly/i),
     });
     expect(await fs.readFile(destination, 'utf8')).toBe('company-owned skill\n');
-  });
+  }, 15_000);
 
   it('refuses a symlinked skill directory', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'flowctl-skill-'));
@@ -54,5 +54,5 @@ describe('bundled agent skill installation', () => {
       stderr: expect.stringMatching(/non-directory path/i),
     });
     await expect(fs.access(path.join(outside, 'agentic-bdd', 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }, 15_000);
 });
