@@ -1,21 +1,28 @@
 <div align="center">
 
-# Agentic BDD Flowctl
+# F: flowctl
 
-**Turn React + Spring source code into source-grounded business journeys, composable BDD, and Playwright-ready execution contracts.**
+### Turn code into journeys you can defend.
+
+Source-grounded business journeys, composable BDD, and Playwright-ready execution contracts for React + Spring systems.
 
 [![CI](https://github.com/TarunKurella/agentic-bdd-flowctl/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/TarunKurella/agentic-bdd-flowctl/actions/workflows/ci.yml)
-![Node.js](https://img.shields.io/badge/Node.js-22%20%7C%2024-339933?logo=nodedotjs&logoColor=white)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
-![Version](https://img.shields.io/badge/version-0.2.0-6f42c1)
+![Source grounded](https://img.shields.io/badge/SOURCE-GROUNDED-CAFF4A?style=flat-square&labelColor=0A0D0B)
+![React + Spring](https://img.shields.io/badge/REACT%20%2B%20SPRING-59D7D1?style=flat-square&labelColor=0A0D0B)
+![Node.js](https://img.shields.io/badge/NODE-22%20%7C%2024-FF7043?style=flat-square&labelColor=0A0D0B)
+![Version](https://img.shields.io/badge/VERSION-0.2.0-EDF2E8?style=flat-square&labelColor=0A0D0B)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Outputs](#what-you-get) · [Wiki](https://github.com/TarunKurella/agentic-bdd-flowctl/wiki) · [Documentation](#documentation)
+[Website](https://flowctl-journeys.zcmvcybmt8.chatgpt.site/) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Outputs](#what-you-get) · [Wiki](https://github.com/TarunKurella/agentic-bdd-flowctl/wiki) · [Documentation](#documentation)
 
 </div>
+
+[![Flowctl — turn code into journeys you can defend](docs/assets/flowctl-readme.svg)](https://flowctl-journeys.zcmvcybmt8.chatgpt.site/)
 
 ## What
 
 Flowctl is a developer tool for understanding an unfamiliar application and generating trustworthy happy-path BDD from source code.
+
+> **An LLM can write a scenario. Flowctl proves there is a journey.**
 
 It traces successful business operations across:
 

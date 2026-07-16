@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title description">
+  <title id="title">Flowctl — Turn code into journeys you can defend</title>
+  <desc id="description">Source-grounded BDD compiler for React and Spring applications</desc>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#e7efe0" stroke-opacity="0.07" stroke-width="1"/>
+    </pattern>
+    <linearGradient id="fade" x1="0" x2="1">
+      <stop offset="0" stop-color="#caff4a" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#caff4a" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="360" rx="18" fill="#0a0d0b"/>
+  <rect x="1" y="1" width="1198" height="358" rx="17" fill="none" stroke="#e7efe0" stroke-opacity="0.18"/>
+  <rect width="1200" height="360" rx="18" fill="url(#grid)"/>
+  <circle cx="1090" cy="80" r="220" fill="url(#fade)"/>
+
+  <rect x="60" y="48" width="44" height="44" rx="3" fill="#caff4a"/>
+  <text x="82" y="77" text-anchor="middle" fill="#0a0d0b" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" font-weight="800">F:</text>
+  <text x="120" y="77" fill="#edf2e8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="23" font-weight="700" letter-spacing="-1">flowctl</text>
+  <text x="60" y="151" fill="#edf2e8" font-family="Arial, Helvetica, sans-serif" font-size="47" font-weight="650" letter-spacing="-2">Turn code into journeys</text>
+  <text x="60" y="205" fill="#caff4a" font-family="Arial, Helvetica, sans-serif" font-size="47" font-weight="560" letter-spacing="-2">you can defend.</text>
+  <text x="62" y="246" fill="#9aa495" font-family="Arial, Helvetica, sans-serif" font-size="18">Source-grounded BDD compiler for React + Spring systems.</text>
+
+  <g transform="translate(60 292)" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="650">
+    <text x="0" y="0" fill="#59d7d1">SOURCE</text>
+    <text x="78" y="0" fill="#657060">→</text>
+    <text x="106" y="0" fill="#edf2e8">EVIDENCE</text>
+    <text x="196" y="0" fill="#657060">→</text>
+    <text x="224" y="0" fill="#ff7043">GUARDED PATHS</text>
+    <text x="359" y="0" fill="#657060">→</text>
+    <text x="387" y="0" fill="#caff4a">BDD</text>
+    <text x="425" y="0" fill="#657060">→</text>
+    <text x="453" y="0" fill="#edf2e8">PLAYWRIGHT-READY</text>
+  </g>
+
+  <g transform="translate(825 105)" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+    <rect width="300" height="170" rx="8" fill="#111612" stroke="#e7efe0" stroke-opacity="0.22"/>
+    <circle cx="24" cy="22" r="4" fill="#4d554b"/><circle cx="38" cy="22" r="4" fill="#4d554b"/><circle cx="52" cy="22" r="4" fill="#caff4a"/>
+    <text x="20" y="57" fill="#9aa495" font-size="12">$ flowctl discover</text>
+    <text x="20" y="88" fill="#657060" font-size="11">01  evidence</text><text x="257" y="88" fill="#caff4a" font-size="11">OK</text>
+    <text x="20" y="113" fill="#657060" font-size="11">02  witnesses</text><text x="241" y="113" fill="#59d7d1" font-size="11">2 paths</text>
+    <text x="20" y="138" fill="#657060" font-size="11">03  variants</text><text x="230" y="138" fill="#ff7043" font-size="11">2 distinct</text>
+    <text x="20" y="158" fill="#caff4a" font-size="10">BDD plan ready for grounding</text>
+  </g>
+</svg>
